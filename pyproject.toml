@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cicadc"
+version = "0.1.0"
+authors = [
+  { name="Carsten Wulff", email="carsten@wulff.no" },
+]
+dependencies = [
+    "numpy",       # Core data arrays
+    "scipy",       # Signal processing (filters)
+    "manim",       # Animation / rendering engine
+    "PySide6",     # Qt6 GUI framework
+    "click",       # CLI parsing
+]
+description = "Interactive PySide6 + manim demonstration of how an ADC works"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Education",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Education",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
+
+[project.scripts]
+cicadc = "cicadc.cli:main"
+
+[project.gui-scripts]
+cicadcw = "cicadc.cli:main"  # Windows no-console wrapper
+
+[project.urls]
+"Homepage" = "https://github.com/wulffern/cicadc"
+"Bug Tracker" = "https://github.com/wulffern/cicadc/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+cicadc = ["assets/*.png"]
