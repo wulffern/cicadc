@@ -75,6 +75,10 @@ make lint     # ruff (if installed)
 make build    # build wheel + sdist
 ```
 
+## Acknowledgements
+
+Big thanks to **Domen Visnar** for the idea behind this project!
+
 ## Status
 
 Single/− sinusoid input, adjustable bit depth, noise, and a normalised

@@ -123,6 +123,12 @@ class MainWindow(QWidget):
         hint.setStyleSheet("color:#8aa0c8; font-size:11px;")
         outer.addWidget(hint)
         outer.addStretch(1)
+
+        thanks = QLabel("Big thanks to Domen Visnar for the idea!")
+        thanks.setWordWrap(True)
+        thanks.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        thanks.setStyleSheet("color:#f5c542; font-size:11px; font-style:italic;")
+        outer.addWidget(thanks)
         return box
 
     def _bits_text(self) -> str:
