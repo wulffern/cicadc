@@ -24,10 +24,10 @@ from .render_widget import RenderWidget
 from .signal_source import SignalSource
 
 # Chain-bar block colors (mirror the scene palette).
-_ANALOG = "#39ff14"
-_NOISE = "#ffd400"
-_NEUTRAL = "#e6f0ff"
-_FILTERED = "#7fae7f"
+_ANALOG = "#3361e6"   # analog signal (blue, matches the car)
+_NOISE = "#ffd400"    # additive noise
+_QUANT = "#b6e3b6"    # quantizer / modulator output (pale green)
+_DIGITAL = "#cdd6e6"  # decimated/filtered digital output (white / gray)
 
 
 class ChainBar(QWidget):
@@ -70,21 +70,27 @@ class ChainBar(QWidget):
             )
 
     def update_state(
-        self, noise_on: bool, filter_on: bool, bits: int, taps: int, sigma_delta: bool = False
+        self, noise_on: bool, filter_on: bool, bits: int, taps: int, sd_order: int = 0
     ) -> None:
+        is_sd = sd_order > 0
         self._blocks["analog"].setText("ANALOG")
         self._blocks["noise"].setText("+ NOISE" if noise_on else "noise off")
-        adc_text = f"\u03a3\u0394 \u00b7 {bits} bit" if sigma_delta else f"ADC \u00b7 {bits} bit"
+        order_sup = {1: "\u00b9", 2: "\u00b2"}.get(sd_order, "")
+        adc_text = f"\u03a3\u0394{order_sup} \u00b7 {bits} bit" if is_sd else f"ADC \u00b7 {bits} bit"
         self._blocks["adc"].setText(adc_text)
-        filt_text = "DECIMATE" if sigma_delta else "FILTER"
-        self._blocks["filter"].setText(f"{filt_text} \u00b7 avg {taps}" if filter_on else f"{filt_text.lower()} off")
+        if is_sd:
+            decim_sup = {2: "\u00b2", 3: "\u00b3"}.get(sd_order + 1, "")
+            on_text, off_text = f"sinc{decim_sup} \u00b7 {taps}", "decimate off"
+        else:
+            on_text, off_text = f"FILTER \u00b7 avg {taps}", "filter off"
+        self._blocks["filter"].setText(on_text if filter_on else off_text)
         self._blocks["digital"].setText("DIGITAL")
 
         self._style(self._blocks["analog"], True, _ANALOG)
         self._style(self._blocks["noise"], noise_on, _NOISE)
-        self._style(self._blocks["adc"], True, _FILTERED if sigma_delta else _NEUTRAL)
-        self._style(self._blocks["filter"], filter_on, _FILTERED)
-        self._style(self._blocks["digital"], True, _NEUTRAL)
+        self._style(self._blocks["adc"], True, _QUANT)
+        self._style(self._blocks["filter"], filter_on, _DIGITAL)
+        self._style(self._blocks["digital"], True, _DIGITAL)
 
 
 class MainWindow(QWidget):
@@ -165,6 +171,7 @@ class MainWindow(QWidget):
         self.adc_combo = QComboBox()
         self.adc_combo.addItem("Nyquist (uniform)", "nyquist")
         self.adc_combo.addItem("1st-order \u03a3\u0394", "sigma_delta")
+        self.adc_combo.addItem("2nd-order \u03a3\u0394", "sigma_delta2")
         self.adc_combo.currentIndexChanged.connect(self._on_adc_type)
         form.addRow("ADC type", self.adc_combo)
 
@@ -202,8 +209,10 @@ class MainWindow(QWidget):
         form.addRow("Noise (FS)", noise_row)
 
         self.filter_slider = QSlider(Qt.Orientation.Horizontal)
-        self.filter_slider.setRange(1, 16)
+        self.filter_slider.setRange(1, 64)
         self.filter_slider.setValue(self.scene.filter_taps)
+        self.filter_slider.setPageStep(4)
+        self.filter_slider.setTickInterval(8)
         self.filter_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
         self.filter_slider.valueChanged.connect(self._on_filter)
         self.filter_label = QLabel(self._filter_text())
@@ -224,8 +233,9 @@ class MainWindow(QWidget):
         outer.addWidget(self.play_button)
 
         hint = QLabel(
-            "Green = analog signal\nBlue car = analog now\n"
-            "White = unfiltered digital\nDull green = filtered digital\n"
+            "Blue = analog signal (+ car)\n"
+            "Pale green = quantizer/modulator out\n"
+            "White/gray = digital output (+ car)\n"
             "Yellow dots = samples"
         )
         hint.setWordWrap(True)
@@ -253,12 +263,13 @@ class MainWindow(QWidget):
             self.view.render_once()
 
     def _update_chain(self) -> None:
+        sd_order = {"sigma_delta": 1, "sigma_delta2": 2}.get(self.scene.adc_mode, 0)
         self.chain.update_state(
             noise_on=self.signal.noise_amp > 0.0,
             filter_on=self.scene.filter_taps > 1,
             bits=self.quantizer.bits,
             taps=self.scene.filter_taps,
-            sigma_delta=self.scene.adc_mode == "sigma_delta",
+            sd_order=sd_order,
         )
 
     def _on_freq(self, v: float) -> None:
@@ -301,7 +312,7 @@ class MainWindow(QWidget):
     def _on_adc_type(self, index: int) -> None:
         mode = self.adc_combo.itemData(index)
         self.scene.set_adc_mode(mode)
-        self.dither_check.setEnabled(mode == "sigma_delta")
+        self.dither_check.setEnabled(mode in ("sigma_delta", "sigma_delta2"))
         self._update_chain()
         self._refresh_if_paused()
 

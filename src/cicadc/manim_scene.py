@@ -29,7 +29,7 @@ from manim import (
 )
 
 from .quantizer import Quantizer
-from .sigma_delta import SigmaDelta1
+from .sigma_delta import SigmaDelta1, SigmaDelta2
 from .signal_source import SignalSource
 
 _ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
@@ -39,12 +39,12 @@ CAR_PATH = os.path.join(_ASSETS_DIR, "car.png")
 BG = "#0b0f1a"
 PANEL_EDGE = "#2b3a63"
 GRID = "#1d2742"
-CURVE = "#39ff14"   # analog signal (neon green)
-STAIR = "#7fae7f"   # filtered digital signal (desaturated green accent)
-PREFILTER = "#e6f0ff"  # unfiltered (raw) digital signal (white / neutral)
+CURVE = "#3361e6"   # analog signal (blue, matches the analog car)
+QUANT = "#b6e3b6"   # quantizer / modulator output (pale green)
+DIGITAL = "#cdd6e6"  # decimated/filtered digital output (white / gray, matches car)
 ERROR = "#ff3b3b"   # quantization error
 SAMPLE = "#ffd400"  # sample points
-CAR = "#ff8c00"     # "now" marker / car
+CAR = "#3361e6"     # analog "now" marker / car (blue, fallback)
 TEXT = "#e6f0ff"
 BAR = "#3b82f6"
 BAR_NOW = "#39ff14"
@@ -66,17 +66,20 @@ class AdcScene:
         self.pixel_width = pixel_width
         self.pixel_height = pixel_height
 
-        # ADC behaviour: "nyquist" (memoryless uniform quantizer) or
-        # "sigma_delta" (1st-order modulator whose coarse bitstream is decimated
-        # by the same moving-average filter).
+        # ADC behaviour: "nyquist" (memoryless uniform quantizer) or a
+        # sigma-delta modulator ("sigma_delta" = 1st order, "sigma_delta2" = 2nd
+        # order) whose coarse bitstream is decimated by the moving-average filter.
         self.adc_mode = adc_mode
         self.sd_dither = 0.0
-        self.sd = SigmaDelta1(
-            input_fn=lambda k: self.signal.sample_value(k),
-            bits=self.quantizer.bits,
-            vref=self.quantizer.vref,
-            dither=self.sd_dither,
-        )
+        _input_fn = lambda k: self.signal.sample_value(k)  # noqa: E731
+        self._modulators = {
+            "sigma_delta": SigmaDelta1(
+                input_fn=_input_fn, bits=self.quantizer.bits, vref=self.quantizer.vref
+            ),
+            "sigma_delta2": SigmaDelta2(
+                input_fn=_input_fn, bits=self.quantizer.bits, vref=self.quantizer.vref
+            ),
+        }
 
         self.frame_height = 7.0
         self.frame_width = self.frame_height * pixel_width / pixel_height
@@ -90,10 +93,17 @@ class AdcScene:
         )
 
         self._text_cache: dict[tuple, Text] = {}
+        # Car variants, all keyed to the traces they ride:
+        #   "color"  -> blue analog car (the original sprite)
+        #   "quant"  -> pale green, the quantizer/modulator (raw) output
+        #   "digital"-> white/gray, the decimated/filtered digital output
+        # plus translucent "*_t" variants for the left panel's "shadow" markers.
         self._car_arrays = {"color": self._load_car()}
-        self._car_arrays["gray"] = self._to_gray(self._car_arrays["color"])
-        self._car_arrays["shadow"] = self._fade_alpha(self._car_arrays["gray"], 0.4)
-        self._car_arrays["green"] = self._tint(self._car_arrays["gray"], (0.5, 0.68, 0.5))
+        gray = self._to_gray(self._car_arrays["color"])
+        self._car_arrays["quant"] = self._tint(gray, (0.71, 0.89, 0.71))
+        self._car_arrays["quant_t"] = self._fade_alpha(self._car_arrays["quant"], 0.4)
+        self._car_arrays["digital"] = self._tint(gray, (0.80, 0.84, 0.90))
+        self._car_arrays["digital_t"] = self._fade_alpha(self._car_arrays["digital"], 0.45)
         self._car_bases: dict[str, object] = {}
         self._layout()
 
@@ -189,10 +199,55 @@ class AdcScene:
     def _half_span(self) -> float:
         return self.signal.window / 2.0
 
-    def _group_delay(self) -> float:
-        """Group delay of the K-tap moving average, in seconds of signal time."""
+    def _filter_order(self) -> int:
+        """Order ``M`` of the sinc^M decimation filter: ``modulator order + 1``.
+
+        Nyquist mode uses a plain moving average (sinc^1); a 1st-order modulator
+        is matched by sinc^2 and a 2nd-order modulator by sinc^3 - the textbook
+        "decimator order = modulator order + 1" rule.
+        """
+        sd = self._modulator()
+        return (sd.order + 1) if sd is not None else 1
+
+    def _decimation_taps(self) -> np.ndarray:
+        """Composite FIR of the sinc^M decimator (M cascaded K-tap boxcars).
+
+        Cached by ``(K, M)``; ``sum(h) == K**M`` so dividing by it is unity at DC.
+        """
         K = max(1, int(self.filter_taps))
-        return (K - 1) / 2.0 * self.signal.sample_period
+        M = self._filter_order()
+        key = (K, M)
+        if getattr(self, "_fir_key", None) != key:
+            h = np.ones(1)
+            box = np.ones(K)
+            for _ in range(M):
+                h = np.convolve(h, box)
+            self._fir = h
+            self._fir_key = key
+        return self._fir
+
+    def _group_delay(self) -> float:
+        """Group delay of the sinc^M decimation filter, in seconds of signal time.
+
+        An ``M``-fold cascade of K-tap boxcars has impulse-response length
+        ``M*(K-1)+1`` and a (linear-phase) group delay of half that.
+        """
+        K = max(1, int(self.filter_taps))
+        M = self._filter_order()
+        return M * (K - 1) / 2.0 * self.signal.sample_period
+
+    def _digital_car_anchor(self):
+        """``(t_rel, sample_index)`` for the delay-compensated digital-output car.
+
+        The car trails "now" by the decimator's group delay so the latency is
+        visible, but the trail is capped to stay inside the window (long sinc^M
+        filters can delay by more than the whole window). It still lands on the
+        analog curve because the delay-compensated output is evaluated there.
+        """
+        delay = self._group_delay()
+        d_vis = min(delay, 0.82 * self._half_span())
+        k_vis = self.signal.sample_index_at(delay - d_vis)
+        return -d_vis, k_vis
 
     # ------------------------------------------------------------ small helpers
     def _text(self, s: str, font_size: float, color: str = TEXT, rotate: float = 0.0) -> Text:
@@ -222,7 +277,13 @@ class AdcScene:
                 base = ImageMobject(arr)
                 base.scale_to_fit_height(height)
             else:
-                fallback = {"color": CAR, "gray": "#9aa3b2", "shadow": "#555a66", "green": STAIR}
+                fallback = {
+                    "color": CAR,
+                    "quant": QUANT,
+                    "quant_t": QUANT,
+                    "digital": DIGITAL,
+                    "digital_t": DIGITAL,
+                }
                 base = Triangle(color=fallback[variant], fill_opacity=1.0).scale(0.16).rotate(np.pi)
             self._car_bases[variant] = base
         car = base.copy()
@@ -299,57 +360,71 @@ class AdcScene:
         fut_lbl.move_to([self.lp_x0 + 0.25, (self.y_now + self.yt) / 2.0, 0])
         items.append(fut_lbl)
 
-        # Cars. The unfiltered (gray shadow) and true analog (blue) cars sit at
-        # now (the middle). The filtered (green) car trails by the filter's group
-        # delay, landing back on the analog curve - i.e. delay-compensated.
+        # Cars. The blue car drives along the (blue) analog curve at now. The
+        # translucent "shadow" marks the quantized "now" value - pale green (the
+        # quantizer/modulator output) when a decimator is active, otherwise
+        # white/gray (the digital output). The white/gray digital-output car
+        # trails "now" by the decimator's group delay, landing back on the analog
+        # curve - so the filter's latency is visible.
         k0 = sig.sample_index_now()
-        delay = self._group_delay()
         ang_now = self._tangent_angle(0.0, self.aw)
-        items.append(self._car(self._x_amp(self._raw_level(k0)), self.y_now, angle=ang_now, variant="shadow"))
-        if self.filter_taps > 1:  # the filtered (green) car only when a filter is active
-            t_green = sig.t_rel_of_index(k0) - delay
-            ang_green = self._tangent_angle(t_green, self.aw)
-            items.append(self._car(self._x_amp(self._filt_level(k0)), self._y_time(t_green), angle=ang_green, variant="green"))
+        raw_variant = "quant_t" if self.filter_taps > 1 else "digital_t"
+        items.append(self._car(self._x_amp(self._raw_level(k0)), self.y_now, angle=ang_now, variant=raw_variant))
+        if self.filter_taps > 1:  # the digital-output car only when a decimator is active
+            t_d, k_vis = self._digital_car_anchor()
+            ang_d = self._tangent_angle(t_d, self.aw)
+            items.append(self._car(self._x_amp(self._filt_level(k_vis)), self._y_time(t_d), angle=ang_d, variant="digital"))
         items.append(self._car(self._x_amp(sig.clean_value(0.0)), self.y_now, angle=ang_now, variant="color"))
         return items
 
     def _filter_gain(self) -> float:
-        """Magnitude response of the K-tap moving average at the signal frequency.
+        """Magnitude response of the sinc^M decimator at the signal frequency.
 
         Normalising the filtered output by this gain makes the filter's transfer
         function unity at the signal frequency, so the filtered amplitude matches
-        the analog signal (a plain moving average otherwise attenuates in-band).
+        the analog signal (the cascade otherwise attenuates in-band). The cascade
+        magnitude is the single-stage moving-average magnitude raised to ``M``.
         """
         K = max(1, int(self.filter_taps))
         if K == 1:
             return 1.0
+        M = self._filter_order()
         w = 2.0 * np.pi * self.signal.frequency * self.signal.sample_period
         s = np.sin(w / 2.0)
         if abs(s) < 1e-9:
             return 1.0  # near DC, gain is already 1
-        mag = abs(np.sin(K * w / 2.0) / s) / K
-        return float(max(mag, 0.1))  # clamp to avoid blow-up near a filter null
+        mag = (abs(np.sin(K * w / 2.0) / s) / K) ** M
+        return float(max(mag, 0.05))  # clamp to avoid blow-up near a filter null
 
     # ----------------------------------------------------------------- ADC mode
+    def _is_sigma_delta(self) -> bool:
+        return self.adc_mode in self._modulators
+
+    def _modulator(self):
+        """The active sigma-delta modulator, or ``None`` in Nyquist mode."""
+        return self._modulators.get(self.adc_mode)
+
     def set_adc_mode(self, mode: str) -> None:
-        """Switch between the "nyquist" and "sigma_delta" ADC models."""
+        """Switch between the "nyquist", "sigma_delta" and "sigma_delta2" ADCs."""
         self.adc_mode = mode
-        self.sd.reset()
+        self.reset_sd()
 
     def set_sd_dither(self, amount: float) -> None:
         """Set the sigma-delta dither amplitude (0 disables it)."""
         self.sd_dither = amount
-        self.sd.dither = amount
-        self.sd.reset()
+        self.reset_sd()
 
     def reset_sd(self) -> None:
-        """Invalidate the modulator cache (input/quantizer parameters changed)."""
-        self.sd.reset()
+        """Invalidate every modulator cache (input/quantizer parameters changed)."""
+        for sd in self._modulators.values():
+            sd.reset()
 
     def _sync_sd(self) -> None:
-        """Mirror the live quantizer settings into the modulator, resetting its
-        cache if anything that changes the output sequence has changed."""
-        sd = self.sd
+        """Mirror the live quantizer settings into the active modulator, resetting
+        its cache if anything that changes the output sequence has changed."""
+        sd = self._modulator()
+        if sd is None:
+            return
         if sd.bits != self.quantizer.bits or sd.vref != self.quantizer.vref or sd.dither != self.sd_dither:
             sd.bits = self.quantizer.bits
             sd.vref = self.quantizer.vref
@@ -359,19 +434,26 @@ class AdcScene:
     def _raw_level(self, k: int) -> float:
         """Reconstructed (unfiltered) digital level for sample index ``k``.
 
-        For the sigma-delta ADC this is the coarse modulator output; otherwise it
+        For a sigma-delta ADC this is the coarse modulator output; otherwise it
         is the memoryless uniform quantizer level.
         """
-        if self.adc_mode == "sigma_delta":
-            return self.sd.output(k)
+        sd = self._modulator()
+        if sd is not None:
+            return sd.output(k)
         q = self.quantizer
         return q.level_of(q.code_of(self.signal.sample_value(k)))
 
     def _filt_level(self, k: int) -> float:
-        """Filtered digital level at sample ``k`` (normalised K-tap moving avg)."""
+        """Decimated digital level at sample ``k`` (normalised sinc^M cascade)."""
         K = max(1, int(self.filter_taps))
+        if K <= 1:
+            return self._raw_level(k)
+        h = self._decimation_taps()
         gain = self._filter_gain()
-        return (sum(self._raw_level(j) for j in range(k - K + 1, k + 1)) / K) / gain
+        acc = 0.0
+        for j, hj in enumerate(h):
+            acc += hj * self._raw_level(k - j)
+        return (acc / float(h.sum())) / gain
 
     def _tangent_angle(self, t_rel: float, aw: float) -> float:
         """Rotation so a car (nose +y) points along the path tangent at ``t_rel``."""
@@ -429,26 +511,30 @@ class AdcScene:
         delay = self._group_delay()
         K = max(1, int(self.filter_taps))
 
-        # For the stateful sigma-delta ADC, warm up and cache the contiguous range
+        # For a stateful sigma-delta ADC, warm up and cache the contiguous range
         # of sample indices this frame will touch (window, the filter's look-back,
         # and the delay-compensated filtered trace) before drawing.
-        if self.adc_mode == "sigma_delta":
+        if self._is_sigma_delta():
             self._sync_sd()
-            k_lo = sig.sample_index_at(-half) - K - 1
+            fir_len = len(self._decimation_taps())  # decimator look-back, in samples
+            k_lo = sig.sample_index_at(-half) - fir_len - 1
             k_hi = sig.sample_index_at(half + delay) + 2
-            self.sd.prepare(k_lo, k_hi)
+            self._modulator().prepare(k_lo, k_hi)
 
         # Unfiltered (gray) staircase at the true sample times, with sample dots.
         # When the filter is off it is the only output, so draw it more boldly.
         raw_pts, raw_dots = self._hold_staircase(self._raw_level, self._x_dig, -half, half, delay=0.0)
         if K > 1:
-            items.append(self._polyline(raw_pts, PREFILTER, 2.0))
-            # Filtered (green) staircase, shifted down by the group delay so it
-            # lines up in time with the analog signal (delay-compensated).
+            # With a decimator/filter active, the raw trace is the coarse
+            # quantizer/modulator output (pale green) and the filtered trace is
+            # the digital output (white/gray), delay-compensated to line up in
+            # time with the analog signal.
+            items.append(self._polyline(raw_pts, QUANT, 2.0))
             filt_pts, _ = self._hold_staircase(self._filt_level, self._x_dig, -half, half, delay=delay)
-            items.append(self._polyline(filt_pts, STAIR, 3.5))
+            items.append(self._polyline(filt_pts, DIGITAL, 3.5))
         else:
-            items.append(self._polyline(raw_pts, PREFILTER, 3.5))
+            # No filter: the quantizer output is the digital output (white/gray).
+            items.append(self._polyline(raw_pts, DIGITAL, 3.5))
 
         dots = VGroup()
         for x, y in raw_dots:
@@ -459,12 +545,17 @@ class AdcScene:
         title = self._text("DIGITAL SIGNAL", 22, TEXT)
         title.move_to([(self.rp_x0 + self.rp_x1) / 2.0, self.rp_y1 - 0.35, 0])
         items.append(title)
-        if self.adc_mode == "sigma_delta":
-            sub_text = f"1st-order \u03a3\u0394  -  {q.bits}-bit"
+        sd = self._modulator()
+        if sd is not None:
+            ordinal = {1: "1st", 2: "2nd"}.get(sd.order, f"{sd.order}th")
+            sub_text = f"{ordinal}-order \u03a3\u0394  -  {q.bits}-bit"
         else:
             sub_text = f"{q.bits} bits  -  {q.num_levels} levels"
         if K > 1:
-            sub_text += f"  -  avg {K}"
+            M = self._filter_order()
+            sup = {2: "\u00b2", 3: "\u00b3"}.get(M, "")
+            prefix = f"sinc{sup} " if M > 1 else ""
+            sub_text += f"  -  {prefix}avg {K}"
         sub = self._text(sub_text, 16, TEXT)
         sub.move_to([(self.rp_x0 + self.rp_x1) / 2.0, self.rp_y1 - 0.72, 0])
         items.append(sub)
@@ -476,7 +567,7 @@ class AdcScene:
         # Current readout near the bottom: the digital code (Nyquist) or the
         # coarse modulator output (sigma-delta).
         k0 = sig.sample_index_now()
-        if self.adc_mode == "sigma_delta":
+        if self._is_sigma_delta():
             readout = self._text(f"\u03a3\u0394  {self._raw_level(k0):+.2f}", 26, TEXT)
         else:
             now_code = q.code_of(sig.value_now())
@@ -484,16 +575,17 @@ class AdcScene:
         readout.move_to([(self.rp_x0 + self.rp_x1) / 2.0, self.yb - 0.3, 0])
         items.append(readout)
 
-        # Cars (heading nudged): gray at the unfiltered output at now; green at the
-        # filtered output, trailing by the group delay (matches the left panel).
-        t_green = sig.t_rel_of_index(k0) - delay
-
+        # Cars (heading nudged): the quantizer/modulator output at now (pale green
+        # when a decimator is active, else white/gray as the digital output); and
+        # the white/gray digital-output car, trailing by the group delay.
         def nudge(t_rel):
             return max(-0.45, min(0.45, 0.4 * self._tangent_angle(t_rel, self.aw_right)))
 
-        items.append(self._car(self._x_dig(self._raw_level(k0)), self.y_now, angle=nudge(0.0), variant="gray"))
-        if K > 1:  # the filtered (green) car only when a filter is active
-            items.append(self._car(self._x_dig(self._filt_level(k0)), self._y_time(t_green), angle=nudge(t_green), variant="green"))
+        raw_variant = "quant" if K > 1 else "digital"
+        items.append(self._car(self._x_dig(self._raw_level(k0)), self.y_now, angle=nudge(0.0), variant=raw_variant))
+        if K > 1:  # the digital-output car only when a decimator is active
+            t_d, k_vis = self._digital_car_anchor()
+            items.append(self._car(self._x_dig(self._filt_level(k_vis)), self._y_time(t_d), angle=nudge(t_d), variant="digital"))
         return items
 
     # ----------------------------------------------------------------- render
