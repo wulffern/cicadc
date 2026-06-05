@@ -101,7 +101,7 @@ class MainWindow(QWidget):
         self.signal = SignalSource(frequency=0.6, amplitude=0.85, speed=1.0, window=4.0, sample_period=0.4)
         self.quantizer = Quantizer(bits=3)
         self.scene = AdcScene(signal=self.signal, quantizer=self.quantizer)
-        self.view = RenderWidget(self.scene, fps=24)
+        self.view = RenderWidget(self.scene, fps=30)
 
         self.chain = ChainBar()
         controls = self._build_controls()

@@ -6,7 +6,7 @@ signal on the right, with an optional moving-average filter, quantization
 shadow, and little cars that drive along the signal paths.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "Carsten Wulff"
 __email__ = "carsten@wulff.no"
 

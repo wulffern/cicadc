@@ -7,13 +7,21 @@ window:
 
 - **Left panel (analog)** - the analog signal drawn as a path that scrolls past
   "now" (the middle line), with the future at the top and the past at the
-  bottom. Optional noise is added. A blue car drives along the signal and turns
-  to follow the path; a translucent gray "shadow" car marks the quantized value.
+  bottom. A blue car drives along the (clean) analog signal and turns to follow
+  the path. A "shadow" car marks the converter output at now - pale green when a
+  decimator is active (the coarse quantizer/modulator output) or white/gray
+  otherwise (the digital output). Noise is added before the converter, not on
+  the displayed analog curve.
 - **Right panel (digital)** - the digital signal as a sample-and-hold staircase.
-  Gray is the unfiltered (raw) quantizer output and green is the optional
-  moving-average filtered output (normalised to unity gain at the signal
-  frequency). A green car follows the filtered output, trailing by the filter's
-  group delay so it lands back on the analog curve (delay-compensated).
+  Pale green is the coarse quantizer/modulator output and white/gray is the
+  decimated/filtered digital output (normalised to unity gain at the signal
+  frequency). A white/gray car follows the digital output, trailing by the
+  filter's group delay so it lands back on the analog curve (delay-compensated).
+
+The ADC can run as a plain Nyquist-rate uniform quantizer or as a 1st- or
+2nd-order **sigma-delta** modulator (with optional dither); a sigma-delta
+bitstream is decimated by a cascaded sinc^N (CIC-style) moving-average filter
+matched to the modulator order.
 
 ## Project layout
 
@@ -58,13 +66,19 @@ python main.py
 
 ## Controls
 
-- **Frequency / Amplitude** - the input sinusoid (amplitude is a fraction of full scale).
+- **Frequency / Amplitude** - the input sinusoid (sliders; amplitude is a fraction of full scale).
 - **Speed** - how fast the signal scrolls past "now".
-- **Bits** - resolution of the quantizer.
+- **Bits** - resolution of the quantizer / modulator.
 - **Sample period** - the ADC sample clock interval.
-- **Noise** - additive analog noise amplitude.
-- **Avg** - moving-average filter length on the digital output (1 = off).
+- **Noise** - additive noise amplitude, applied before the converter.
+- **ADC type** - Nyquist quantizer, or 1st-/2nd-order sigma-delta modulator.
+- **Dither** - deterministic dither for the sigma-delta quantizer (ΣΔ modes only).
+- **Avg** - decimation/averaging length on the digital output (1 = off); uses a
+  sinc^N cascade matched to the ADC type.
 - **Play / Pause** - start or stop the animation.
+
+A signal-chain bar above the view highlights the active path
+(Analog → Noise → Quantizer/ΣΔ → Filter → Digital).
 
 ## Development
 
@@ -79,8 +93,16 @@ make build    # build wheel + sdist
 
 Big thanks to **Domen Visnar** for the idea behind this project!
 
+## Rendering
+
+The manim scene is rasterised offscreen (Cairo) and painted into the Qt widget.
+Cost scales with pixel count, so resolution and frame rate trade off; the
+default is 1280x896 at 30 fps, with the static scenery cached so only the moving
+content is rebuilt each frame.
+
 ## Status
 
-Single/− sinusoid input, adjustable bit depth, noise, and a normalised
-moving-average filter with delay compensation are implemented. Random /
-multi-sinusoid inputs and a configurable bandwidth filter are planned follow-ups.
+Single sinusoid input, adjustable bit depth, noise, Nyquist and 1st-/2nd-order
+sigma-delta ADCs, a sinc^N decimation filter with delay compensation, and the
+signal-chain bar are implemented. Random / multi-sinusoid inputs and a
+configurable bandwidth filter are planned follow-ups.

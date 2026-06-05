@@ -55,8 +55,8 @@ class AdcScene:
         self,
         signal: SignalSource | None = None,
         quantizer: Quantizer | None = None,
-        pixel_width: int = 880,
-        pixel_height: int = 616,
+        pixel_width: int = 1280,
+        pixel_height: int = 896,
         filter_taps: int = 1,
         adc_mode: str = "nyquist",
     ) -> None:
@@ -91,6 +91,11 @@ class AdcScene:
             frame_height=self.frame_height,
             background_color=BG,
         )
+        # The static scenery (panels, grids, axes, labels) is built once and
+        # reused every frame so only the moving content is rebuilt; this keeps the
+        # per-frame cost down so resolution and frame rate can be raised.
+        self._static_mobs: List | None = None
+        self._static_key: tuple | None = None
 
         self._text_cache: dict[tuple, Text] = {}
         # Car variants, all keyed to the traces they ride:
@@ -308,9 +313,9 @@ class AdcScene:
         return rect
 
     # --------------------------------------------------------------- building
-    def _build_left(self) -> List:
+    def _static_left(self) -> List:
+        """Static scenery for the analog panel (rebuilt only when bits change)."""
         q = self.quantizer
-        sig = self.signal
         items: List = [self._panel(self.lp_x0, self.lp_y0, self.lp_x1, self.lp_y1)]
 
         # Quantization decision thresholds as faint vertical gridlines.
@@ -331,21 +336,6 @@ class AdcScene:
             Line([self.lp_x0 + 0.2, self.y_now, 0], [self.lp_x1 - 0.2, self.y_now, 0]).set_stroke(TEXT, 2.0)
         )
 
-        # Continuous analog curve across past and future (now in the middle).
-        half = self._half_span()
-        curve = sig.curve_points(200, -half, half)
-        true_pts = [(self._x_amp(v), self._y_time(t)) for t, v in curve]
-        items.append(self._polyline(true_pts, CURVE, 4.0))
-
-        # Sample points along the analog curve.
-        first_k, last_k = sig.sample_indices_in(-half, half)
-        dots = VGroup()
-        for k in range(first_k, last_k + 1):
-            t_rel = sig.t_rel_of_index(k)
-            dots.add(Dot([self._x_amp(sig.sample_value_clean(k)), self._y_time(t_rel), 0], radius=0.045, color=SAMPLE))
-        items.append(dots)
-
-        # Labels.
         title = self._text("ANALOG SIGNAL", 22, CURVE)
         title.move_to([(self.lp_x0 + self.lp_x1) / 2.0, self.lp_y1 - 0.35, 0])
         items.append(title)
@@ -359,6 +349,26 @@ class AdcScene:
         fut_lbl = self._text("future ->", 14, TEXT, rotate=np.pi / 2)
         fut_lbl.move_to([self.lp_x0 + 0.25, (self.y_now + self.yt) / 2.0, 0])
         items.append(fut_lbl)
+        return items
+
+    def _dynamic_left(self) -> List:
+        """Moving content for the analog panel (rebuilt every frame)."""
+        sig = self.signal
+        items: List = []
+
+        # Continuous analog curve across past and future (now in the middle).
+        half = self._half_span()
+        curve = sig.curve_points(140, -half, half)
+        true_pts = [(self._x_amp(v), self._y_time(t)) for t, v in curve]
+        items.append(self._polyline(true_pts, CURVE, 4.0))
+
+        # Sample points along the analog curve.
+        first_k, last_k = sig.sample_indices_in(-half, half)
+        dots = VGroup()
+        for k in range(first_k, last_k + 1):
+            t_rel = sig.t_rel_of_index(k)
+            dots.add(Dot([self._x_amp(sig.sample_value_clean(k)), self._y_time(t_rel), 0], radius=0.045, color=SAMPLE))
+        items.append(dots)
 
         # Cars. The blue car drives along the (blue) analog curve at now. The
         # translucent "shadow" marks the quantized "now" value - pale green (the
@@ -483,11 +493,9 @@ class AdcScene:
         pts.append((prev, self._y_time(t1_rel)))
         return pts, dots
 
-    def _build_right(self) -> List:
-        """Right panel: the digital (sample-and-hold) signal vs time, mirroring
-        the left panel's layout so the two graphs are directly comparable."""
+    def _static_right(self) -> List:
+        """Static scenery for the digital panel (rebuilt only when bits change)."""
         q = self.quantizer
-        sig = self.signal
         items: List = [self._panel(self.rp_x0, self.rp_y0, self.rp_x1, self.rp_y1)]
 
         # Quantization levels as faint vertical gridlines (same as the left panel).
@@ -506,6 +514,22 @@ class AdcScene:
         items.append(
             Line([self.rp_x0 + 0.2, self.y_now, 0], [self.rp_x1 - 0.2, self.y_now, 0]).set_stroke(TEXT, 2.0)
         )
+
+        title = self._text("DIGITAL SIGNAL", 22, TEXT)
+        title.move_to([(self.rp_x0 + self.rp_x1) / 2.0, self.rp_y1 - 0.35, 0])
+        items.append(title)
+        for val, lab in ((-1.0, "-FS"), (1.0, "+FS")):
+            t = self._text(lab, 16, TEXT)
+            t.move_to([self._x_dig(val), self.yb - 0.3, 0])
+            items.append(t)
+        return items
+
+    def _dynamic_right(self) -> List:
+        """Right panel moving content: the digital (sample-and-hold) signal vs
+        time, mirroring the left panel so the two graphs are directly comparable."""
+        q = self.quantizer
+        sig = self.signal
+        items: List = []
 
         half = self._half_span()
         delay = self._group_delay()
@@ -541,10 +565,7 @@ class AdcScene:
             dots.add(Dot([x, y, 0], radius=0.045, color=SAMPLE))
         items.append(dots)
 
-        # Labels.
-        title = self._text("DIGITAL SIGNAL", 22, TEXT)
-        title.move_to([(self.rp_x0 + self.rp_x1) / 2.0, self.rp_y1 - 0.35, 0])
-        items.append(title)
+        # Subtitle (changes with bits / averaging / ADC mode).
         sd = self._modulator()
         if sd is not None:
             ordinal = {1: "1st", 2: "2nd"}.get(sd.order, f"{sd.order}th")
@@ -559,10 +580,6 @@ class AdcScene:
         sub = self._text(sub_text, 16, TEXT)
         sub.move_to([(self.rp_x0 + self.rp_x1) / 2.0, self.rp_y1 - 0.72, 0])
         items.append(sub)
-        for val, lab in ((-1.0, "-FS"), (1.0, "+FS")):
-            t = self._text(lab, 16, TEXT)
-            t.move_to([self._x_dig(val), self.yb - 0.3, 0])
-            items.append(t)
 
         # Current readout near the bottom: the digital code (Nyquist) or the
         # coarse modulator output (sigma-delta).
@@ -589,9 +606,22 @@ class AdcScene:
         return items
 
     # ----------------------------------------------------------------- render
+    def _static_mobjects(self) -> List:
+        """Static scenery mobjects, cached and rebuilt only when they change."""
+        key = (self.quantizer.bits, self.quantizer.vref, self.pixel_width, self.pixel_height)
+        if self._static_key != key or self._static_mobs is None:
+            self._static_mobs = self._static_left() + self._static_right()
+            self._static_key = key
+        return self._static_mobs
+
     def render_frame(self) -> np.ndarray:
-        """Render the current state and return an ``(H, W, 4)`` RGBA uint8 array."""
-        mobjects = self._build_left() + self._build_right()
+        """Render the current state and return an ``(H, W, 4)`` RGBA uint8 array.
+
+        The static scenery (panels, grids, axes, labels) is built once and
+        cached; only the moving content is rebuilt each frame. Everything is
+        rasterised in a single pass.
+        """
+        mobjects = self._static_mobjects() + self._dynamic_left() + self._dynamic_right()
         self.camera.reset()
         self.camera.capture_mobjects(mobjects)
         return np.asarray(self.camera.pixel_array, dtype=np.uint8).copy()
