@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Callable, Tuple
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -21,6 +23,69 @@ from .quantizer import Quantizer
 from .render_widget import RenderWidget
 from .signal_source import SignalSource
 
+# Chain-bar block colors (mirror the scene palette).
+_ANALOG = "#39ff14"
+_NOISE = "#ffd400"
+_NEUTRAL = "#e6f0ff"
+_FILTERED = "#7fae7f"
+
+
+class ChainBar(QWidget):
+    """A horizontal block diagram of the signal chain shown above the panels.
+
+    Analog -> Noise -> ADC -> Filter -> Digital. The Noise and Filter blocks dim
+    when they are switched off so the active processing chain is obvious.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._blocks: dict[str, QLabel] = {}
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(4)
+        layout.addStretch(1)
+        order = ["analog", "noise", "adc", "filter", "digital"]
+        for i, key in enumerate(order):
+            lbl = QLabel()
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._blocks[key] = lbl
+            layout.addWidget(lbl)
+            if i < len(order) - 1:
+                arrow = QLabel("\u2192")
+                arrow.setStyleSheet("color:#55617a; font-size:16px;")
+                layout.addWidget(arrow)
+        layout.addStretch(1)
+
+    @staticmethod
+    def _style(label: QLabel, active: bool, color: str) -> None:
+        if active:
+            label.setStyleSheet(
+                f"QLabel {{ color:{color}; border:1px solid {color}; border-radius:6px;"
+                f" padding:4px 10px; font-weight:bold; background:#121a2e; }}"
+            )
+        else:
+            label.setStyleSheet(
+                "QLabel { color:#55617a; border:1px solid #2b3a63; border-radius:6px;"
+                " padding:4px 10px; background:#0f1626; }"
+            )
+
+    def update_state(
+        self, noise_on: bool, filter_on: bool, bits: int, taps: int, sigma_delta: bool = False
+    ) -> None:
+        self._blocks["analog"].setText("ANALOG")
+        self._blocks["noise"].setText("+ NOISE" if noise_on else "noise off")
+        adc_text = f"\u03a3\u0394 \u00b7 {bits} bit" if sigma_delta else f"ADC \u00b7 {bits} bit"
+        self._blocks["adc"].setText(adc_text)
+        filt_text = "DECIMATE" if sigma_delta else "FILTER"
+        self._blocks["filter"].setText(f"{filt_text} \u00b7 avg {taps}" if filter_on else f"{filt_text.lower()} off")
+        self._blocks["digital"].setText("DIGITAL")
+
+        self._style(self._blocks["analog"], True, _ANALOG)
+        self._style(self._blocks["noise"], noise_on, _NOISE)
+        self._style(self._blocks["adc"], True, _FILTERED if sigma_delta else _NEUTRAL)
+        self._style(self._blocks["filter"], filter_on, _FILTERED)
+        self._style(self._blocks["digital"], True, _NEUTRAL)
+
 
 class MainWindow(QWidget):
     def __init__(self) -> None:
@@ -32,19 +97,64 @@ class MainWindow(QWidget):
         self.scene = AdcScene(signal=self.signal, quantizer=self.quantizer)
         self.view = RenderWidget(self.scene, fps=24)
 
+        self.chain = ChainBar()
         controls = self._build_controls()
+        self._update_chain()
 
-        layout = QHBoxLayout(self)
-        layout.addWidget(self.view, stretch=1)
-        layout.addWidget(controls, stretch=0)
+        body = QHBoxLayout()
+        body.addWidget(self.view, stretch=1)
+        body.addWidget(controls, stretch=0)
+
+        root = QVBoxLayout(self)
+        root.addWidget(self.chain, stretch=0)
+        root.addLayout(body, stretch=1)
 
         self._apply_dark_theme()
-        self.resize(1280, 760)
+        self.resize(1280, 800)
+
+    # --------------------------------------------------------------- helpers
+    def _slider_row(
+        self,
+        vmin: float,
+        vmax: float,
+        step: float,
+        value: float,
+        suffix: str,
+        decimals: int,
+        on_change: Callable[[float], None],
+    ) -> Tuple[QWidget, QSlider]:
+        """Build a float slider (QSlider is integer-only) with a live value label.
+
+        The slider is mapped onto integer ticks of ``step`` and the float value is
+        recovered as ``tick * step``; ``on_change`` receives the float value.
+        """
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(int(round(vmin / step)), int(round(vmax / step)))
+        slider.setValue(int(round(value / step)))
+
+        label = QLabel(f"{value:.{decimals}f}{suffix}")
+        label.setMinimumWidth(58)
+        label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        label.setStyleSheet("color:#aab6d0;")
+
+        def handler(tick: int) -> None:
+            v = tick * step
+            label.setText(f"{v:.{decimals}f}{suffix}")
+            on_change(v)
+
+        slider.valueChanged.connect(handler)
+
+        row = QWidget()
+        h = QHBoxLayout(row)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.addWidget(slider, stretch=1)
+        h.addWidget(label, stretch=0)
+        return row, slider
 
     # --------------------------------------------------------------- controls
     def _build_controls(self) -> QWidget:
         box = QGroupBox("Controls")
-        box.setMaximumWidth(280)
+        box.setMaximumWidth(300)
         form = QFormLayout()
 
         self.input_combo = QComboBox()
@@ -52,28 +162,26 @@ class MainWindow(QWidget):
         self.input_combo.setEnabled(False)  # only shape available in the MVP
         form.addRow("Input", self.input_combo)
 
-        self.freq_spin = QDoubleSpinBox()
-        self.freq_spin.setRange(0.05, 5.0)
-        self.freq_spin.setSingleStep(0.05)
-        self.freq_spin.setValue(self.signal.frequency)
-        self.freq_spin.setSuffix(" Hz")
-        self.freq_spin.valueChanged.connect(self._on_freq)
-        form.addRow("Frequency", self.freq_spin)
+        self.adc_combo = QComboBox()
+        self.adc_combo.addItem("Nyquist (uniform)", "nyquist")
+        self.adc_combo.addItem("1st-order \u03a3\u0394", "sigma_delta")
+        self.adc_combo.currentIndexChanged.connect(self._on_adc_type)
+        form.addRow("ADC type", self.adc_combo)
 
-        self.amp_spin = QDoubleSpinBox()
-        self.amp_spin.setRange(0.0, 1.2)
-        self.amp_spin.setSingleStep(0.05)
-        self.amp_spin.setValue(self.signal.amplitude)
-        self.amp_spin.valueChanged.connect(self._on_amp)
-        form.addRow("Amplitude (FS)", self.amp_spin)
+        freq_row, self.freq_slider = self._slider_row(
+            0.05, 5.0, 0.05, self.signal.frequency, " Hz", 2, self._on_freq
+        )
+        form.addRow("Frequency", freq_row)
 
-        self.speed_spin = QDoubleSpinBox()
-        self.speed_spin.setRange(0.1, 4.0)
-        self.speed_spin.setSingleStep(0.1)
-        self.speed_spin.setValue(self.signal.speed)
-        self.speed_spin.setSuffix(" x")
-        self.speed_spin.valueChanged.connect(self._on_speed)
-        form.addRow("Scroll speed", self.speed_spin)
+        amp_row, self.amp_slider = self._slider_row(
+            0.0, 1.2, 0.05, self.signal.amplitude, "", 2, self._on_amp
+        )
+        form.addRow("Amplitude (FS)", amp_row)
+
+        speed_row, self.speed_slider = self._slider_row(
+            0.1, 4.0, 0.1, self.signal.speed, " x", 1, self._on_speed
+        )
+        form.addRow("Scroll speed", speed_row)
 
         self.bits_slider = QSlider(Qt.Orientation.Horizontal)
         self.bits_slider.setRange(1, 8)
@@ -83,20 +191,15 @@ class MainWindow(QWidget):
         self.bits_label = QLabel(self._bits_text())
         form.addRow(self.bits_label, self.bits_slider)
 
-        self.sample_spin = QDoubleSpinBox()
-        self.sample_spin.setRange(0.05, 1.0)
-        self.sample_spin.setSingleStep(0.05)
-        self.sample_spin.setValue(self.signal.sample_period)
-        self.sample_spin.setSuffix(" s")
-        self.sample_spin.valueChanged.connect(self._on_sample)
-        form.addRow("Sample period", self.sample_spin)
+        sample_row, self.sample_slider = self._slider_row(
+            0.05, 1.0, 0.05, self.signal.sample_period, " s", 2, self._on_sample
+        )
+        form.addRow("Sample period", sample_row)
 
-        self.noise_spin = QDoubleSpinBox()
-        self.noise_spin.setRange(0.0, 0.5)
-        self.noise_spin.setSingleStep(0.02)
-        self.noise_spin.setValue(self.signal.noise_amp)
-        self.noise_spin.valueChanged.connect(self._on_noise)
-        form.addRow("Noise (FS)", self.noise_spin)
+        noise_row, self.noise_slider = self._slider_row(
+            0.0, 0.5, 0.02, self.signal.noise_amp, "", 2, self._on_noise
+        )
+        form.addRow("Noise (FS)", noise_row)
 
         self.filter_slider = QSlider(Qt.Orientation.Horizontal)
         self.filter_slider.setRange(1, 16)
@@ -105,6 +208,12 @@ class MainWindow(QWidget):
         self.filter_slider.valueChanged.connect(self._on_filter)
         self.filter_label = QLabel(self._filter_text())
         form.addRow(self.filter_label, self.filter_slider)
+
+        self.dither_check = QCheckBox("dither (\u03a3\u0394 only)")
+        self.dither_check.setChecked(False)
+        self.dither_check.setEnabled(False)  # only meaningful in sigma-delta mode
+        self.dither_check.toggled.connect(self._on_dither)
+        form.addRow("Dither", self.dither_check)
 
         self.play_button = QPushButton("Play")
         self.play_button.setCheckable(True)
@@ -116,7 +225,7 @@ class MainWindow(QWidget):
 
         hint = QLabel(
             "Green = analog signal\nBlue car = analog now\n"
-            "Gray = unfiltered digital\nGreen = filtered digital\n"
+            "White = unfiltered digital\nDull green = filtered digital\n"
             "Yellow dots = samples"
         )
         hint.setWordWrap(True)
@@ -143,12 +252,23 @@ class MainWindow(QWidget):
         if not self.view.is_running():
             self.view.render_once()
 
+    def _update_chain(self) -> None:
+        self.chain.update_state(
+            noise_on=self.signal.noise_amp > 0.0,
+            filter_on=self.scene.filter_taps > 1,
+            bits=self.quantizer.bits,
+            taps=self.scene.filter_taps,
+            sigma_delta=self.scene.adc_mode == "sigma_delta",
+        )
+
     def _on_freq(self, v: float) -> None:
         self.signal.frequency = v
+        self.scene.reset_sd()
         self._refresh_if_paused()
 
     def _on_amp(self, v: float) -> None:
         self.signal.amplitude = v
+        self.scene.reset_sd()
         self._refresh_if_paused()
 
     def _on_speed(self, v: float) -> None:
@@ -156,20 +276,37 @@ class MainWindow(QWidget):
 
     def _on_sample(self, v: float) -> None:
         self.signal.sample_period = v
+        self.scene.reset_sd()
         self._refresh_if_paused()
 
     def _on_bits(self, v: int) -> None:
         self.quantizer.bits = v
         self.bits_label.setText(self._bits_text())
+        self.scene.reset_sd()
+        self._update_chain()
         self._refresh_if_paused()
 
     def _on_noise(self, v: float) -> None:
         self.signal.noise_amp = v
+        self.scene.reset_sd()
+        self._update_chain()
         self._refresh_if_paused()
 
     def _on_filter(self, v: int) -> None:
         self.scene.filter_taps = v
         self.filter_label.setText(self._filter_text())
+        self._update_chain()
+        self._refresh_if_paused()
+
+    def _on_adc_type(self, index: int) -> None:
+        mode = self.adc_combo.itemData(index)
+        self.scene.set_adc_mode(mode)
+        self.dither_check.setEnabled(mode == "sigma_delta")
+        self._update_chain()
+        self._refresh_if_paused()
+
+    def _on_dither(self, checked: bool) -> None:
+        self.scene.set_sd_dither(1.0 if checked else 0.0)
         self._refresh_if_paused()
 
     def _on_play(self, checked: bool) -> None:
@@ -195,7 +332,7 @@ class MainWindow(QWidget):
                 border-radius: 5px; padding: 8px; font-weight: bold;
             }
             QPushButton:checked { background-color: #1f7a3a; }
-            QDoubleSpinBox, QSpinBox, QComboBox {
+            QComboBox {
                 background-color: #121a2e; border: 1px solid #2b3a63;
                 border-radius: 4px; padding: 3px;
             }

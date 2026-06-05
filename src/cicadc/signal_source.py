@@ -74,8 +74,20 @@ class SignalSource:
         return float(self._waveform(ts))
 
     def value_continuous(self, t_rel: float = 0.0) -> float:
-        """Continuous analog value at ``t_now + t_rel`` (no sample-and-hold)."""
+        """Continuous *ADC-input* value at ``t_now + t_rel`` (signal + noise).
+
+        This is the noisy signal the converter actually sees. For the displayed
+        analog (original) signal use :meth:`clean_value` instead - noise is added
+        *before the ADC* but is not part of the original signal.
+        """
         return float(self._waveform(self.t_now + t_rel))
+
+    def clean_value(self, t_rel: float = 0.0) -> float:
+        """Continuous *noise-free* analog value at ``t_now + t_rel``.
+
+        The original signal as drawn on the analog panel: no ADC-input noise.
+        """
+        return float(self._clean(self.t_now + t_rel))
 
     def derivative(self, t_rel: float = 0.0) -> float:
         """d(value)/d(time) of the continuous signal at ``t_now + t_rel``."""
@@ -113,23 +125,28 @@ class SignalSource:
         return int(np.floor((self.t_now + t_rel) / self.sample_period))
 
     def sample_value(self, k: int) -> float:
-        """Analog value at sample instant ``k`` (absolute time ``k * Ts``)."""
+        """ADC-input value at sample instant ``k`` (signal + noise)."""
         return float(self._waveform(k * self.sample_period))
+
+    def sample_value_clean(self, k: int) -> float:
+        """Noise-free analog value at sample instant ``k`` (original signal)."""
+        return float(self._clean(k * self.sample_period))
 
     def t_rel_of_index(self, k: int) -> float:
         """Time offset from now of sample index ``k``."""
         return k * self.sample_period - self.t_now
 
     def curve_points(self, n: int = 240, t0_rel: float = 0.0, t1_rel: float | None = None):
-        """Dense samples of the continuous curve over ``[now+t0, now+t1]``.
+        """Dense samples of the *clean* (original) curve over ``[now+t0, now+t1]``.
 
         Returns a list of ``(t_rel, value)`` where ``t_rel`` is the offset from
-        now. Defaults to the full forward window when ``t1_rel`` is ``None``.
+        now. Defaults to the full forward window when ``t1_rel`` is ``None``. This
+        is the noise-free analog signal shown on the analog panel.
         """
         if t1_rel is None:
             t1_rel = self.window
         t_rel = np.linspace(t0_rel, t1_rel, n)
-        values = self._waveform(self.t_now + t_rel)
+        values = self._clean(self.t_now + t_rel)
         return list(zip(t_rel.tolist(), values.tolist()))
 
     def sample_instants(self) -> List[Tuple[float, float]]:

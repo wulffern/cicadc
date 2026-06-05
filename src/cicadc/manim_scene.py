@@ -29,6 +29,7 @@ from manim import (
 )
 
 from .quantizer import Quantizer
+from .sigma_delta import SigmaDelta1
 from .signal_source import SignalSource
 
 _ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
@@ -39,8 +40,8 @@ BG = "#0b0f1a"
 PANEL_EDGE = "#2b3a63"
 GRID = "#1d2742"
 CURVE = "#39ff14"   # analog signal (neon green)
-STAIR = "#39ff14"   # filtered digital signal (green, matches the green car)
-PREFILTER = "#8a93a3"  # unfiltered (raw) digital signal (gray, matches the gray car)
+STAIR = "#7fae7f"   # filtered digital signal (desaturated green accent)
+PREFILTER = "#e6f0ff"  # unfiltered (raw) digital signal (white / neutral)
 ERROR = "#ff3b3b"   # quantization error
 SAMPLE = "#ffd400"  # sample points
 CAR = "#ff8c00"     # "now" marker / car
@@ -57,12 +58,25 @@ class AdcScene:
         pixel_width: int = 880,
         pixel_height: int = 616,
         filter_taps: int = 1,
+        adc_mode: str = "nyquist",
     ) -> None:
         self.signal = signal or SignalSource()
         self.quantizer = quantizer or Quantizer()
         self.filter_taps = filter_taps  # moving-average length on the digital output
         self.pixel_width = pixel_width
         self.pixel_height = pixel_height
+
+        # ADC behaviour: "nyquist" (memoryless uniform quantizer) or
+        # "sigma_delta" (1st-order modulator whose coarse bitstream is decimated
+        # by the same moving-average filter).
+        self.adc_mode = adc_mode
+        self.sd_dither = 0.0
+        self.sd = SigmaDelta1(
+            input_fn=lambda k: self.signal.sample_value(k),
+            bits=self.quantizer.bits,
+            vref=self.quantizer.vref,
+            dither=self.sd_dither,
+        )
 
         self.frame_height = 7.0
         self.frame_width = self.frame_height * pixel_width / pixel_height
@@ -79,7 +93,7 @@ class AdcScene:
         self._car_arrays = {"color": self._load_car()}
         self._car_arrays["gray"] = self._to_gray(self._car_arrays["color"])
         self._car_arrays["shadow"] = self._fade_alpha(self._car_arrays["gray"], 0.4)
-        self._car_arrays["green"] = self._tint(self._car_arrays["gray"], (0.25, 1.0, 0.3))
+        self._car_arrays["green"] = self._tint(self._car_arrays["gray"], (0.5, 0.68, 0.5))
         self._car_bases: dict[str, object] = {}
         self._layout()
 
@@ -208,7 +222,7 @@ class AdcScene:
                 base = ImageMobject(arr)
                 base.scale_to_fit_height(height)
             else:
-                fallback = {"color": CAR, "gray": "#9aa3b2", "shadow": "#555a66", "green": CURVE}
+                fallback = {"color": CAR, "gray": "#9aa3b2", "shadow": "#555a66", "green": STAIR}
                 base = Triangle(color=fallback[variant], fill_opacity=1.0).scale(0.16).rotate(np.pi)
             self._car_bases[variant] = base
         car = base.copy()
@@ -267,7 +281,7 @@ class AdcScene:
         dots = VGroup()
         for k in range(first_k, last_k + 1):
             t_rel = sig.t_rel_of_index(k)
-            dots.add(Dot([self._x_amp(sig.sample_value(k)), self._y_time(t_rel), 0], radius=0.045, color=SAMPLE))
+            dots.add(Dot([self._x_amp(sig.sample_value_clean(k)), self._y_time(t_rel), 0], radius=0.045, color=SAMPLE))
         items.append(dots)
 
         # Labels.
@@ -296,7 +310,7 @@ class AdcScene:
             t_green = sig.t_rel_of_index(k0) - delay
             ang_green = self._tangent_angle(t_green, self.aw)
             items.append(self._car(self._x_amp(self._filt_level(k0)), self._y_time(t_green), angle=ang_green, variant="green"))
-        items.append(self._car(self._x_amp(sig.value_continuous(0.0)), self.y_now, angle=ang_now, variant="color"))
+        items.append(self._car(self._x_amp(sig.clean_value(0.0)), self.y_now, angle=ang_now, variant="color"))
         return items
 
     def _filter_gain(self) -> float:
@@ -316,8 +330,40 @@ class AdcScene:
         mag = abs(np.sin(K * w / 2.0) / s) / K
         return float(max(mag, 0.1))  # clamp to avoid blow-up near a filter null
 
+    # ----------------------------------------------------------------- ADC mode
+    def set_adc_mode(self, mode: str) -> None:
+        """Switch between the "nyquist" and "sigma_delta" ADC models."""
+        self.adc_mode = mode
+        self.sd.reset()
+
+    def set_sd_dither(self, amount: float) -> None:
+        """Set the sigma-delta dither amplitude (0 disables it)."""
+        self.sd_dither = amount
+        self.sd.dither = amount
+        self.sd.reset()
+
+    def reset_sd(self) -> None:
+        """Invalidate the modulator cache (input/quantizer parameters changed)."""
+        self.sd.reset()
+
+    def _sync_sd(self) -> None:
+        """Mirror the live quantizer settings into the modulator, resetting its
+        cache if anything that changes the output sequence has changed."""
+        sd = self.sd
+        if sd.bits != self.quantizer.bits or sd.vref != self.quantizer.vref or sd.dither != self.sd_dither:
+            sd.bits = self.quantizer.bits
+            sd.vref = self.quantizer.vref
+            sd.dither = self.sd_dither
+            sd.reset()
+
     def _raw_level(self, k: int) -> float:
-        """Reconstructed quantizer level for sample index ``k`` (unfiltered)."""
+        """Reconstructed (unfiltered) digital level for sample index ``k``.
+
+        For the sigma-delta ADC this is the coarse modulator output; otherwise it
+        is the memoryless uniform quantizer level.
+        """
+        if self.adc_mode == "sigma_delta":
+            return self.sd.output(k)
         q = self.quantizer
         return q.level_of(q.code_of(self.signal.sample_value(k)))
 
@@ -383,6 +429,15 @@ class AdcScene:
         delay = self._group_delay()
         K = max(1, int(self.filter_taps))
 
+        # For the stateful sigma-delta ADC, warm up and cache the contiguous range
+        # of sample indices this frame will touch (window, the filter's look-back,
+        # and the delay-compensated filtered trace) before drawing.
+        if self.adc_mode == "sigma_delta":
+            self._sync_sd()
+            k_lo = sig.sample_index_at(-half) - K - 1
+            k_hi = sig.sample_index_at(half + delay) + 2
+            self.sd.prepare(k_lo, k_hi)
+
         # Unfiltered (gray) staircase at the true sample times, with sample dots.
         # When the filter is off it is the only output, so draw it more boldly.
         raw_pts, raw_dots = self._hold_staircase(self._raw_level, self._x_dig, -half, half, delay=0.0)
@@ -393,7 +448,7 @@ class AdcScene:
             filt_pts, _ = self._hold_staircase(self._filt_level, self._x_dig, -half, half, delay=delay)
             items.append(self._polyline(filt_pts, STAIR, 3.5))
         else:
-            items.append(self._polyline(raw_pts, "#aeb6c4", 3.5))
+            items.append(self._polyline(raw_pts, PREFILTER, 3.5))
 
         dots = VGroup()
         for x, y in raw_dots:
@@ -401,10 +456,13 @@ class AdcScene:
         items.append(dots)
 
         # Labels.
-        title = self._text("DIGITAL SIGNAL", 22, STAIR)
+        title = self._text("DIGITAL SIGNAL", 22, TEXT)
         title.move_to([(self.rp_x0 + self.rp_x1) / 2.0, self.rp_y1 - 0.35, 0])
         items.append(title)
-        sub_text = f"{q.bits} bits  -  {q.num_levels} levels"
+        if self.adc_mode == "sigma_delta":
+            sub_text = f"1st-order \u03a3\u0394  -  {q.bits}-bit"
+        else:
+            sub_text = f"{q.bits} bits  -  {q.num_levels} levels"
         if K > 1:
             sub_text += f"  -  avg {K}"
         sub = self._text(sub_text, 16, TEXT)
@@ -415,10 +473,14 @@ class AdcScene:
             t.move_to([self._x_dig(val), self.yb - 0.3, 0])
             items.append(t)
 
-        # Current code readout near the bottom.
+        # Current readout near the bottom: the digital code (Nyquist) or the
+        # coarse modulator output (sigma-delta).
         k0 = sig.sample_index_now()
-        now_code = q.code_of(sig.value_now())
-        readout = self._text(f"{q.code_string(now_code)}  ({now_code})", 26, BAR_NOW)
+        if self.adc_mode == "sigma_delta":
+            readout = self._text(f"\u03a3\u0394  {self._raw_level(k0):+.2f}", 26, TEXT)
+        else:
+            now_code = q.code_of(sig.value_now())
+            readout = self._text(f"{q.code_string(now_code)}  ({now_code})", 26, TEXT)
         readout.move_to([(self.rp_x0 + self.rp_x1) / 2.0, self.yb - 0.3, 0])
         items.append(readout)
 
