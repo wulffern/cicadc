@@ -5,10 +5,11 @@ analog signal (with optional noise) on the left and the resulting digital
 signal on the right, with an optional moving-average filter, quantization
 shadow, and little cars that drive along the signal paths. Two analysis strips
 along the bottom show the quantization noise over time (scaled to the LSB) and
-the FFT of the digital output (log frequency axis, 0 dBFS reference).
+the FFT of the digital output (log frequency axis, 0 dBFS reference). The
+animation can also be recorded to an MP4 from the UI.
 """
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 __author__ = "Carsten Wulff"
 __email__ = "carsten@wulff.no"
 

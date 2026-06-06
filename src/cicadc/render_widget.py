@@ -16,6 +16,7 @@ from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtWidgets import QWidget
 
 from .manim_scene import AdcScene
+from .recorder import VideoRecorder
 
 
 class RenderWidget(QWidget):
@@ -30,6 +31,7 @@ class RenderWidget(QWidget):
         self._qimage: QImage | None = None
         self._arr: np.ndarray | None = None
         self._last_t: float | None = None
+        self._recorder: VideoRecorder | None = None
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._on_tick)
@@ -50,6 +52,23 @@ class RenderWidget(QWidget):
         self._timer.stop()
         self._last_t = None
 
+    # ------------------------------------------------------------- recording
+    def is_recording(self) -> bool:
+        return self._recorder is not None
+
+    def start_recording(self, path: str) -> None:
+        """Begin writing each rendered frame to an MP4 at ``path``."""
+        self._recorder = VideoRecorder(path, fps=self.fps)
+
+    def stop_recording(self) -> tuple[str, int]:
+        """Finalize the recording and return ``(path, frame_count)``."""
+        recorder = self._recorder
+        self._recorder = None
+        if recorder is None:
+            return ("", 0)
+        recorder.close()
+        return (recorder.path, recorder.frame_count)
+
     def _on_tick(self) -> None:
         now = time.perf_counter()
         dt = 0.0 if self._last_t is None else (now - self._last_t)
@@ -62,6 +81,8 @@ class RenderWidget(QWidget):
     def render_once(self) -> None:
         arr = self.scene.render_frame()
         self._set_array(arr)
+        if self._recorder is not None:
+            self._recorder.add_frame(self._arr)
         code = self.scene.quantizer.code_of(self.scene.signal.value_now())
         self.frameRendered.emit(int(code))
 

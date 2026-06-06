@@ -26,7 +26,7 @@ SRC = os.path.join(ROOT, "src")
 # The car sprite is loaded relative to the cicadc package directory.
 datas = [(os.path.join(SRC, "cicadc", "assets"), "cicadc/assets")]
 binaries = []
-hiddenimports = collect_submodules("cicadc")
+hiddenimports = collect_submodules("cicadc") + ["av"]
 
 # manim ecosystem packages that lack built-in PyInstaller hooks. The app uses
 # manim's Cairo camera (rendered offscreen), not the OpenGL window backends, so
@@ -34,6 +34,7 @@ hiddenimports = collect_submodules("cicadc")
 # only drag in a second Qt binding (PyQt5) and conflict with PySide6.
 _COLLECT = [
     "manim",
+    "av",  # PyAV: bundles ffmpeg libs used by the video recorder (lazy import)
     "manimpango",
     "skia_pathops",
     "mapbox_earcut",

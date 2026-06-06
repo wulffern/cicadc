@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import os
+import time
 from typing import Callable, Tuple
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QSlider,
     QVBoxLayout,
@@ -228,9 +232,23 @@ class MainWindow(QWidget):
         self.play_button.setCheckable(True)
         self.play_button.toggled.connect(self._on_play)
 
+        self.record_button = QPushButton("\u25cf Record video")
+        self.record_button.setCheckable(True)
+        self.record_button.toggled.connect(self._on_record)
+        self.record_button.setStyleSheet(
+            "QPushButton:checked { background-color:#b3261e; }"
+        )
+
+        self.record_label = QLabel("")
+        self.record_label.setWordWrap(True)
+        self.record_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.record_label.setStyleSheet("color:#ff8a80; font-size:11px;")
+
         outer = QVBoxLayout(box)
         outer.addLayout(form)
         outer.addWidget(self.play_button)
+        outer.addWidget(self.record_button)
+        outer.addWidget(self.record_label)
 
         hint = QLabel(
             "Blue = analog signal (+ car)\n"
@@ -238,7 +256,8 @@ class MainWindow(QWidget):
             "White/gray = digital output (+ car)\n"
             "Yellow dots = samples\n"
             "Bottom left = quantization noise vs time (now at right)\n"
-            "Bottom right = FFT of digital output (0 dB = FS)"
+            "Bottom right = FFT of digital output (0 dB = FS)\n"
+            "Record video = save the animation to an .mp4"
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#8aa0c8; font-size:11px;")
@@ -329,6 +348,46 @@ class MainWindow(QWidget):
         else:
             self.play_button.setText("Play")
             self.view.stop()
+
+    def _on_record(self, checked: bool) -> None:
+        if checked:
+            default = os.path.join(
+                os.path.expanduser("~"), f"cicadc-{time.strftime('%Y%m%d-%H%M%S')}.mp4"
+            )
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Save recording", default, "MP4 video (*.mp4)"
+            )
+            if not path:
+                self.record_button.setChecked(False)  # user cancelled
+                return
+            if not path.lower().endswith(".mp4"):
+                path += ".mp4"
+            try:
+                self.view.start_recording(path)
+            except Exception as exc:  # encoder unavailable / bad path
+                self.record_button.setChecked(False)
+                QMessageBox.critical(
+                    self, "Recording failed", f"Could not start recording:\n{exc}"
+                )
+                return
+            self.record_button.setText("\u25a0 Stop recording")
+            self.record_label.setText(f"Recording to {os.path.basename(path)}\u2026")
+            if not self.view.is_running():  # need motion in the video
+                self.play_button.setChecked(True)
+        else:
+            self.record_button.setText("\u25cf Record video")
+            if not self.view.is_recording():
+                return
+            path, frames = self.view.stop_recording()
+            secs = frames / max(1, self.view.fps)
+            self.record_label.setText(
+                f"Saved {os.path.basename(path)} ({frames} frames, ~{secs:.1f}s)"
+            )
+
+    def closeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        if self.view.is_recording():
+            self.view.stop_recording()  # flush partial file instead of corrupting it
+        super().closeEvent(event)
 
     # ----------------------------------------------------------------- theme
     def _apply_dark_theme(self) -> None:

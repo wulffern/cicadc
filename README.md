@@ -121,6 +121,10 @@ python main.py
 - **Avg** - decimation/averaging length on the digital output (1 = off); uses a
   sinc^N cascade matched to the ADC type.
 - **Play / Pause** - start or stop the animation.
+- **Record video** - start/stop capturing the animation to an `.mp4` (H.264).
+  Pick a file when you start; recording auto-starts playback and writes each
+  rendered frame at the view's native 1280×1152 resolution. Encoding uses the
+  bundled PyAV/ffmpeg, so no separate ffmpeg install is needed.
 
 A signal-chain bar above the view highlights the active path
 (Analog → Noise → Quantizer/ΣΔ → Filter → Digital).
@@ -150,6 +154,6 @@ moving content is rebuilt each frame.
 
 Single sinusoid input, adjustable bit depth, noise, Nyquist and 1st-/2nd-order
 sigma-delta ADCs, a sinc^N decimation filter with delay compensation, the
-signal-chain bar, and the quantization-noise / FFT analysis strips are
-implemented. Random / multi-sinusoid inputs and a configurable bandwidth filter
-are planned follow-ups.
+signal-chain bar, the quantization-noise / FFT analysis strips, and MP4
+recording of the animation are implemented. Random / multi-sinusoid inputs and a
+configurable bandwidth filter are planned follow-ups.
