@@ -79,10 +79,21 @@ Linux, Windows and macOS (Apple Silicon) and attached to each
 [GitHub Release](https://github.com/wulffern/cicadc/releases). Download the zip
 for your platform, unpack it, and run:
 
-- **Linux** - `cicadc/cicadc`
-- **Windows** - `cicadc\cicadc.exe`
-- **macOS** - `cicadc.app` (the bundle is unsigned, so the first time use
-  right-click -> Open, or run `xattr -dr com.apple.quarantine cicadc.app`).
+- **Linux** - unpack the zip, run `cicadc/cicadc`
+- **Windows** - unpack the zip, run `cicadc\cicadc.exe`
+- **macOS** - open the `.dmg` and drag `cicadc.app` into Applications.
+
+On macOS the app is **unsigned / not notarized**, so Gatekeeper blocks the first
+launch (often with a cascade of "cannot verify developer" prompts for the
+bundled libraries). Clear the download quarantine once and it runs normally:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/cicadc.app
+open /Applications/cicadc.app
+```
+
+(Right-click -> Open only whitelists the top-level app, so for this multi-library
+bundle the `xattr` one-liner is the reliable fix.)
 
 Intel Macs are not pre-built (GitHub is retiring Intel macOS runners); install
 from PyPI/source there with `pip install cicadc`.

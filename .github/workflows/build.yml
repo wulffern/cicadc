@@ -53,29 +53,43 @@ jobs:
         run: pyinstaller --noconfirm --clean packaging/cicadc.spec
 
       - name: Package archive
+        id: package
         shell: bash
         run: |
           cd dist
           case "${{ runner.os }}" in
             macOS)
-              ditto -c -k --keepParent cicadc.app "../cicadc-${{ matrix.label }}.zip"
+              # Ship a drag-to-Applications .dmg. The app is unsigned, so users
+              # still clear quarantine once (see README); the image just makes
+              # install familiar by placing the app next to an /Applications link.
+              staging="dmg-staging"
+              rm -rf "$staging"
+              mkdir "$staging"
+              cp -R cicadc.app "$staging/"
+              ln -s /Applications "$staging/Applications"
+              asset="cicadc-${{ matrix.label }}.dmg"
+              hdiutil create -volname "cicadc" -srcfolder "$staging" \
+                -fs HFS+ -format UDZO -ov "../$asset"
               ;;
             Windows)
-              7z a "../cicadc-${{ matrix.label }}.zip" cicadc >/dev/null
+              asset="cicadc-${{ matrix.label }}.zip"
+              7z a "../$asset" cicadc >/dev/null
               ;;
             *)
-              zip -r "../cicadc-${{ matrix.label }}.zip" cicadc >/dev/null
+              asset="cicadc-${{ matrix.label }}.zip"
+              zip -r "../$asset" cicadc >/dev/null
               ;;
           esac
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: cicadc-${{ matrix.label }}
-          path: cicadc-${{ matrix.label }}.zip
+          path: ${{ steps.package.outputs.asset }}
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: cicadc-${{ matrix.label }}.zip
+          files: ${{ steps.package.outputs.asset }}
