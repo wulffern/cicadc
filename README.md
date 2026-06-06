@@ -72,6 +72,21 @@ pip install -e .          # or: pip install -r requirements.txt
 
 `make dev-install` runs the editable install for you.
 
+## Prebuilt binaries
+
+Standalone, self-contained bundles (no Python install required) are built for
+Linux, Windows and macOS (Intel + Apple Silicon) and attached to each
+[GitHub Release](https://github.com/wulffern/cicadc/releases). Download the zip
+for your platform, unpack it, and run:
+
+- **Linux** - `cicadc/cicadc`
+- **Windows** - `cicadc\cicadc.exe`
+- **macOS** - `cicadc.app` (the bundle is unsigned, so the first time use
+  right-click -> Open, or run `xattr -dr com.apple.quarantine cicadc.app`).
+
+The bundles are produced by the `Build binaries` workflow (PyInstaller); you can
+also build one locally with `pyinstaller --noconfirm packaging/cicadc.spec`.
+
 ## Run
 
 ```bash

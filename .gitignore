@@ -30,6 +30,7 @@ media/
 # PyInstaller
 *.manifest
 *.spec
+!packaging/cicadc.spec
 
 # Installer logs
 pip-log.txt
