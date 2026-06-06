@@ -75,7 +75,7 @@ pip install -e .          # or: pip install -r requirements.txt
 ## Prebuilt binaries
 
 Standalone, self-contained bundles (no Python install required) are built for
-Linux, Windows and macOS (Intel + Apple Silicon) and attached to each
+Linux, Windows and macOS (Apple Silicon) and attached to each
 [GitHub Release](https://github.com/wulffern/cicadc/releases). Download the zip
 for your platform, unpack it, and run:
 
@@ -83,6 +83,9 @@ for your platform, unpack it, and run:
 - **Windows** - `cicadc\cicadc.exe`
 - **macOS** - `cicadc.app` (the bundle is unsigned, so the first time use
   right-click -> Open, or run `xattr -dr com.apple.quarantine cicadc.app`).
+
+Intel Macs are not pre-built (GitHub is retiring Intel macOS runners); install
+from PyPI/source there with `pip install cicadc`.
 
 The bundles are produced by the `Build binaries` workflow (PyInstaller); you can
 also build one locally with `pyinstaller --noconfirm packaging/cicadc.spec`.

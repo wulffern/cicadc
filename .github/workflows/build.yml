@@ -25,8 +25,6 @@ jobs:
             label: linux-x86_64
           - os: windows-latest
             label: windows-x86_64
-          - os: macos-13
-            label: macos-x86_64
           - os: macos-latest
             label: macos-arm64
     steps:
