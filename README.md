@@ -18,10 +18,26 @@ window:
   frequency). A white/gray car follows the digital output, trailing by the
   filter's group delay so it lands back on the analog curve (delay-compensated).
 
+Two analysis strips run along the bottom of the view:
+
+- **Quantization noise (bottom left)** - the error `analog - digital output`
+  sampled at each instant and held as a staircase, with time on the x-axis and
+  "now" on the far right. The y-axis is scaled to the quantizer's **LSB**
+  (`±1 LSB`), with the LSB-in-FS value annotated.
+- **Digital spectrum (bottom right)** - a Hann-windowed FFT of the digital
+  output on a **logarithmic frequency** axis (`f / f_s`), with magnitude in
+  **dBFS** (0 dB = full scale). The transform uses a long window (1024 points)
+  and is recomputed only when a new sample arrives.
+
 The ADC can run as a plain Nyquist-rate uniform quantizer or as a 1st- or
 2nd-order **sigma-delta** modulator (with optional dither); a sigma-delta
 bitstream is decimated by a cascaded sinc^N (CIC-style) moving-average filter
-matched to the modulator order.
+matched to the modulator order. When reconstructing, both the decimation
+filter's gain/group-delay **and** the modulator's measured in-band signal
+transfer (gain/phase) are de-embedded, so the quantization-noise strip shows the
+true noise rather than a residual signal-transfer error. (The 2nd-order loop's
+coefficients are chosen for single-bit stability, so some residual harmonic
+distortion of the signal remains visible - a real modulator artifact.)
 
 ## Project layout
 
@@ -97,12 +113,14 @@ Big thanks to **Domen Visnar** for the idea behind this project!
 
 The manim scene is rasterised offscreen (Cairo) and painted into the Qt widget.
 Cost scales with pixel count, so resolution and frame rate trade off; the
-default is 1280x896 at 30 fps, with the static scenery cached so only the moving
-content is rebuilt each frame.
+default is 1280x1152 at 30 fps (the taller frame makes room for the bottom
+analysis strips), with the static scenery and the FFT curve cached so only the
+moving content is rebuilt each frame.
 
 ## Status
 
 Single sinusoid input, adjustable bit depth, noise, Nyquist and 1st-/2nd-order
-sigma-delta ADCs, a sinc^N decimation filter with delay compensation, and the
-signal-chain bar are implemented. Random / multi-sinusoid inputs and a
-configurable bandwidth filter are planned follow-ups.
+sigma-delta ADCs, a sinc^N decimation filter with delay compensation, the
+signal-chain bar, and the quantization-noise / FFT analysis strips are
+implemented. Random / multi-sinusoid inputs and a configurable bandwidth filter
+are planned follow-ups.

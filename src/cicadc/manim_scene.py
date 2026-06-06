@@ -56,7 +56,7 @@ class AdcScene:
         signal: SignalSource | None = None,
         quantizer: Quantizer | None = None,
         pixel_width: int = 1280,
-        pixel_height: int = 896,
+        pixel_height: int = 1152,
         filter_taps: int = 1,
         adc_mode: str = "nyquist",
     ) -> None:
@@ -81,7 +81,9 @@ class AdcScene:
             ),
         }
 
-        self.frame_height = 7.0
+        # Keep ~128 px per frame unit (so 896 px -> 7.0 as before, 1152 -> 9.0):
+        # the extra height is reserved for the two analysis strips at the bottom.
+        self.frame_height = pixel_height / 128.0
         self.frame_width = self.frame_height * pixel_width / pixel_height
 
         self.camera = Camera(
@@ -96,6 +98,17 @@ class AdcScene:
         # per-frame cost down so resolution and frame rate can be raised.
         self._static_mobs: List | None = None
         self._static_key: tuple | None = None
+
+        # The FFT is over a long sample history, so it is recomputed only when a
+        # new sample arrives (or a parameter changes) rather than every frame.
+        self._fft_mob: VMobject | None = None
+        self._fft_key: tuple | None = None
+
+        # Measured modulator signal-transfer (gain/phase), cached per parameter
+        # set (it is time-invariant). Used to undo the modulator's in-band
+        # gain/phase when reconstructing, so the noise readout shows only noise.
+        self._stf: complex | None = None
+        self._stf_key: tuple | None = None
 
         self._text_cache: dict[tuple, Text] = {}
         # Car variants, all keyed to the traces they ride:
@@ -174,20 +187,40 @@ class AdcScene:
     # ------------------------------------------------------------------ layout
     def _layout(self) -> None:
         half_w = self.frame_width / 2.0
-        # Left (analog) panel.
+        # Left (analog) panel - now pushed up to leave room for a bottom strip.
         self.lp_x0, self.lp_x1 = -half_w + 0.2, -0.15
-        self.lp_y0, self.lp_y1 = -3.2, 3.2
+        self.lp_y0, self.lp_y1 = -1.8, 4.3
         self.xc_left = (self.lp_x0 + self.lp_x1) / 2.0
         self.aw = (self.lp_x1 - self.lp_x0) / 2.0 - 0.45  # amplitude half-width
-        self.yb = -2.55   # bottom of the time axis (the past)
-        self.yt = 2.45    # top of the time axis (the future)
+        self.yb = -1.2    # bottom of the time axis (the past)
+        self.yt = 3.6     # top of the time axis (the future)
         self.y_now = (self.yb + self.yt) / 2.0  # "now" sits in the middle
 
         # Right (digital) panel - mirrors the left panel's geometry.
         self.rp_x0, self.rp_x1 = 0.15, half_w - 0.2
-        self.rp_y0, self.rp_y1 = -3.2, 3.2
+        self.rp_y0, self.rp_y1 = -1.8, 4.3
         self.xc_right = (self.rp_x0 + self.rp_x1) / 2.0
         self.aw_right = (self.rp_x1 - self.rp_x0) / 2.0 - 0.5
+
+        # Bottom analysis strips (one under each main panel). Time/frequency runs
+        # left-to-right with "now" / DC on the appropriate side.
+        self.bs_y0, self.bs_y1 = -4.3, -2.15  # shared top/bottom of both strips
+        bs_yc = (self.bs_y0 + self.bs_y1) / 2.0
+
+        # Left strip: quantization noise vs time (now on the far right).
+        self.ns_x0 = self.lp_x0 + 0.5   # leave room for the +/-FS axis labels
+        self.ns_x1 = self.lp_x1 - 0.15
+        self.ns_yc = bs_yc - 0.12       # vertical centre (the zero-error line)
+        self.ns_hh = 0.62               # half-height of the +/- full-scale band
+        self.ns_hist = self.signal.window  # seconds of history shown
+
+        # Right strip: FFT magnitude of the digital output (0 dBFS at the top).
+        self.fs_x0 = self.rp_x0 + 0.55  # room for the dB axis labels
+        self.fs_x1 = self.rp_x1 - 0.15
+        self.fs_yt = self.bs_y1 - 0.55  # top of the dB axis (0 dBFS)
+        self.fs_yb = self.bs_y0 + 0.35  # bottom of the dB axis (floor)
+        self.fft_floor_db = -80.0
+        self.fft_size = 1024  # long window -> fine frequency resolution
 
     # ------------------------------------------------------------- coord maps
     def _x_amp(self, value: float) -> float:
@@ -203,6 +236,51 @@ class AdcScene:
 
     def _half_span(self) -> float:
         return self.signal.window / 2.0
+
+    # ----------------------------------------------- bottom-strip coord maps
+    def _ns_x(self, t_rel: float) -> float:
+        """Map a (negative) time offset to the noise strip's x: now -> right."""
+        frac = (t_rel + self.ns_hist) / self.ns_hist  # 0 at oldest, 1 at now
+        return self.ns_x0 + frac * (self.ns_x1 - self.ns_x0)
+
+    def _ns_y(self, err: float, full: float) -> float:
+        """Map a quantization error (FS) to the noise strip's y, clipped to band."""
+        v = max(-1.0, min(1.0, err / full)) if full > 0 else 0.0
+        return self.ns_yc + v * self.ns_hh
+
+    def _fft_x(self, frac: float) -> float:
+        """Map a 0..1 fraction of the band (DC..Nyquist) to the FFT strip's x."""
+        return self.fs_x0 + max(0.0, min(1.0, frac)) * (self.fs_x1 - self.fs_x0)
+
+    def _fft_y(self, db: float) -> float:
+        """Map a dBFS value (0 at top, floor at bottom) to the FFT strip's y."""
+        frac = (db - self.fft_floor_db) / (0.0 - self.fft_floor_db)
+        frac = max(0.0, min(1.0, frac))
+        return self.fs_yb + frac * (self.fs_yt - self.fs_yb)
+
+    # ------------------------------------------------- digital output helpers
+    def _prepare_sd(self, k_lo: int, k_hi: int) -> None:
+        """Warm up / cache the active sigma-delta modulator over ``[k_lo, k_hi]``."""
+        if self._is_sigma_delta():
+            self._sync_sd()
+            self._modulator().prepare(k_lo, k_hi)
+
+    def _digital_out_sample(self, k: int) -> float:
+        """The digital output level at sample ``k`` (filtered when a decimator
+        is active, otherwise the raw quantizer/modulator level)."""
+        return self._filt_level(k) if int(self.filter_taps) > 1 else self._raw_level(k)
+
+    def _digital_out_at(self, t_rel: float) -> float:
+        """Sample-and-held digital output value at relative time ``t_rel``.
+
+        Mirrors the staircase drawn on the digital panel: a filtered output is
+        delay-compensated so its held value lines up in time with the analog
+        signal it represents.
+        """
+        if int(self.filter_taps) > 1:
+            k = self.signal.sample_index_at(t_rel + self._group_delay())
+            return self._filt_level(k)
+        return self._raw_level(self.signal.sample_index_at(t_rel))
 
     def _filter_order(self) -> int:
         """Order ``M`` of the sinc^M decimation filter: ``modulator order + 1``.
@@ -231,15 +309,72 @@ class AdcScene:
             self._fir_key = key
         return self._fir
 
+    def _signal_w(self) -> float:
+        """Digital angular frequency (rad/sample) of the input at the sample rate."""
+        return 2.0 * np.pi * self.signal.frequency * self.signal.sample_period
+
+    def _modulator_stf(self) -> complex:
+        """Measured signal transfer ``STF(e^{jw})`` of the active modulator.
+
+        The decimation filter recovers the modulator output, but a sigma-delta
+        loop does not pass the signal untouched: only its *noise* transfer is
+        shaped, while the *signal* transfer has its own in-band gain/phase. For a
+        1st-order loop this is unity, but the 2nd-order loop's signal gain dips
+        below 1 (and lags) in band; left uncorrected it leaves a residual
+        sinusoid in the reconstruction - a slow waveform that, in LSB units,
+        looks like it grows with bit depth.
+
+        Rather than an analytic model (the linearised 2nd-order loop is actually
+        unstable - it is the quantizer nonlinearity that stabilises it), the
+        transfer is *measured* by a lock-in of the modulator output against the
+        clean input at the signal frequency. It depends only on the modulator
+        parameters and ``f * Ts`` (not on time), so the result is cached.
+        """
+        sd = self._modulator()
+        sig = self.signal
+        w = self._signal_w()
+        if sd is None or abs(w) < 1e-6:
+            return 1.0 + 0.0j
+        key = (
+            self.adc_mode, self.quantizer.bits, self.quantizer.vref, self.sd_dither,
+            round(sig.frequency, 6), round(sig.sample_period, 6), round(sig.amplitude, 6),
+        )
+        if self._stf_key == key and self._stf is not None:
+            return self._stf
+
+        samp_per_cycle = 1.0 / max(sig.frequency * sig.sample_period, 1e-9)
+        n = int(min(max(samp_per_cycle * 24.0, 64.0), 4000.0))
+        k0 = sig.sample_index_now()
+        self._prepare_sd(k0 - n - 2, k0 + 2)
+        ks = np.arange(k0 - n + 1, k0 + 1)
+        t = ks * sig.sample_period
+        y = np.array([self._raw_level(int(k)) for k in ks], dtype=float)
+        ref = sig.amplitude * np.sin(2.0 * np.pi * sig.frequency * t + sig._phase0)
+        win = np.hanning(n)
+        phasor = np.exp(-1j * 2.0 * np.pi * sig.frequency * t)
+        num = np.sum(y * win * phasor)
+        den = np.sum(ref * win * phasor)
+        h = num / den if abs(den) > 1e-12 else (1.0 + 0.0j)
+        self._stf, self._stf_key = h, key
+        return h
+
     def _group_delay(self) -> float:
-        """Group delay of the sinc^M decimation filter, in seconds of signal time.
+        """Group delay of the reconstruction, in seconds of signal time.
 
         An ``M``-fold cascade of K-tap boxcars has impulse-response length
-        ``M*(K-1)+1`` and a (linear-phase) group delay of half that.
+        ``M*(K-1)+1`` and a (linear-phase) group delay of half that. When a
+        decimator is active the modulator's STF phase adds a further (frequency
+        dependent) delay ``-arg(STF)/w`` so the reconstructed output lines up in
+        time with the analog signal it represents.
         """
         K = max(1, int(self.filter_taps))
         M = self._filter_order()
-        return M * (K - 1) / 2.0 * self.signal.sample_period
+        delay = M * (K - 1) / 2.0 * self.signal.sample_period
+        if K > 1:
+            w = self._signal_w()
+            if abs(w) > 1e-9:
+                delay += (-np.angle(self._modulator_stf()) / w) * self.signal.sample_period
+        return delay
 
     def _digital_car_anchor(self):
         """``(t_rel, sample_index)`` for the delay-compensated digital-output car.
@@ -388,22 +523,26 @@ class AdcScene:
         return items
 
     def _filter_gain(self) -> float:
-        """Magnitude response of the sinc^M decimator at the signal frequency.
+        """Magnitude of the full signal path at the input frequency.
 
-        Normalising the filtered output by this gain makes the filter's transfer
-        function unity at the signal frequency, so the filtered amplitude matches
-        the analog signal (the cascade otherwise attenuates in-band). The cascade
-        magnitude is the single-stage moving-average magnitude raised to ``M``.
+        Normalising the reconstructed output by this gain makes the in-band
+        transfer unity, so the recovered amplitude matches the analog signal.
+        This is the sinc^M decimator magnitude (single-stage moving-average
+        magnitude raised to ``M``) times the modulator's signal-transfer
+        magnitude ``|STF|`` - the latter being unity for Nyquist/1st-order but
+        not for the 2nd-order loop, whose in-band gain would otherwise leak into
+        the quantization-noise readout.
         """
         K = max(1, int(self.filter_taps))
         if K == 1:
             return 1.0
         M = self._filter_order()
-        w = 2.0 * np.pi * self.signal.frequency * self.signal.sample_period
+        w = self._signal_w()
         s = np.sin(w / 2.0)
         if abs(s) < 1e-9:
             return 1.0  # near DC, gain is already 1
         mag = (abs(np.sin(K * w / 2.0) / s) / K) ** M
+        mag *= abs(self._modulator_stf())
         return float(max(mag, 0.05))  # clamp to avoid blow-up near a filter null
 
     # ----------------------------------------------------------------- ADC mode
@@ -605,12 +744,207 @@ class AdcScene:
             items.append(self._car(self._x_dig(self._filt_level(k_vis)), self._y_time(t_d), angle=nudge(t_d), variant="digital"))
         return items
 
+    # ------------------------------------------------------- bottom strips
+    def _noise_full(self) -> float:
+        """Value (in FS) at the top/bottom of the noise strip: one LSB.
+
+        The strip is scaled to the quantizer's LSB (its step size), so the band
+        spans +/- 1 LSB and the noise keeps the same relative height whatever the
+        bit depth. The axis is therefore labelled directly in LSBs.
+        """
+        return max(self.quantizer.step, 1e-6)
+
+    def _fft_logfrac(self, norm_freq: float) -> float:
+        """Map a normalised frequency ``f / f_s`` to a 0..1 position on the log
+        frequency axis (the lowest bin ``1/N`` maps to 0, Nyquist ``0.5`` to 1)."""
+        denom = np.log10(self.fft_size / 2.0)
+        if denom <= 0:
+            return 0.0
+        return float(np.log10(max(norm_freq, 1e-12) * self.fft_size) / denom)
+
+    def _static_bottom(self) -> List:
+        """Static scenery for the two bottom analysis strips (cached per bits)."""
+        items: List = []
+        full = self._noise_full()
+
+        # --- Left: quantization-noise-over-time strip ---------------------
+        items.append(self._panel(self.lp_x0, self.bs_y0, self.lp_x1, self.bs_y1))
+        items.append(
+            Line([self.ns_x0, self.ns_yc, 0], [self.ns_x1, self.ns_yc, 0]).set_stroke(GRID, 1.5)
+        )
+        # "now" edge on the far right.
+        items.append(
+            Line([self.ns_x1, self.ns_yc - self.ns_hh, 0], [self.ns_x1, self.ns_yc + self.ns_hh, 0]).set_stroke(TEXT, 1.5)
+        )
+        ntitle = self._text("QUANTIZATION NOISE  (analog - digital)", 15, ERROR)
+        ntitle.move_to([(self.lp_x0 + self.lp_x1) / 2.0, self.bs_y1 - 0.26, 0])
+        items.append(ntitle)
+        lsb_note = self._text(f"1 LSB = {full:.3f} FS", 11, TEXT)
+        lsb_note.move_to([(self.ns_x0 + self.ns_x1) / 2.0, self.bs_y0 + 0.18, 0])
+        items.append(lsb_note)
+        for lab, yy in (("+1 LSB", self.ns_yc + self.ns_hh), ("0", self.ns_yc), ("-1 LSB", self.ns_yc - self.ns_hh)):
+            t = self._text(lab, 12, TEXT)
+            t.move_to([self.lp_x0 + 0.3, yy, 0])
+            items.append(t)
+        now_lbl = self._text("now", 12, TEXT)
+        now_lbl.move_to([self.ns_x1 - 0.22, self.bs_y0 + 0.18, 0])
+        items.append(now_lbl)
+        past_lbl = self._text("<- past", 12, TEXT)
+        past_lbl.move_to([self.ns_x0 + 0.4, self.bs_y0 + 0.18, 0])
+        items.append(past_lbl)
+
+        # --- Right: FFT-of-digital-output strip ---------------------------
+        items.append(self._panel(self.rp_x0, self.bs_y0, self.rp_x1, self.bs_y1))
+        ftitle = self._text("DIGITAL SPECTRUM", 15, DIGITAL)
+        ftitle.move_to([(self.rp_x0 + self.rp_x1) / 2.0, self.bs_y1 - 0.26, 0])
+        items.append(ftitle)
+        grid = VGroup()
+        for db in (0.0, -20.0, -40.0, -60.0, self.fft_floor_db):
+            y = self._fft_y(db)
+            grid.add(Line([self.fs_x0, y, 0], [self.fs_x1, y, 0]))
+        grid.set_stroke(color=GRID, width=1.0)
+        items.append(grid)
+        for db in (0.0, -40.0, self.fft_floor_db):
+            lab = self._text(f"{db:.0f}", 12, TEXT)
+            lab.move_to([self.rp_x0 + 0.3, self._fft_y(db), 0])
+            items.append(lab)
+        db_unit = self._text("dBFS", 12, TEXT)
+        db_unit.move_to([self.rp_x0 + 0.3, self.fs_yt + 0.22, 0])
+        items.append(db_unit)
+
+        # Logarithmic frequency axis: decade gridlines in f / f_s, from Nyquist
+        # (0.5) leftwards down to the lowest resolvable bin (1 / N).
+        rmin = 1.0 / self.fft_size
+        fgrid = VGroup()
+        decades = [0.5]
+        r = 0.1
+        while r > rmin * 1.0001:
+            decades.append(r)
+            r /= 10.0
+        for rv in decades:
+            x = self._fft_x(self._fft_logfrac(rv))
+            fgrid.add(Line([x, self.fs_yb, 0], [x, self.fs_yt, 0]))
+            lab = self._text(("0.5" if rv == 0.5 else f"{rv:g}"), 11, TEXT)
+            lab.move_to([x, self.bs_y0 + 0.18, 0])
+            items.append(lab)
+        fgrid.set_stroke(color=GRID, width=1.0)
+        items.append(fgrid)
+        fcap = self._text("f / f_s  (log)", 11, TEXT)
+        fcap.move_to([self.fs_x1 - 0.45, self.fs_yt + 0.22, 0])
+        items.append(fcap)
+        return items
+
+    def _dynamic_bottom(self) -> List:
+        """Bottom strips: the (per-frame) noise staircase and the cached FFT."""
+        return self._noise_items() + [self._fft_spectrum()]
+
+    def _noise_items(self) -> List:
+        """Per-sample (analog - digital output) error, held as a staircase.
+
+        Compared at the sample instants and held between them, like the digital
+        panel. A filtered output is delay-compensated so each error lines up in
+        time with the analog value it represents. This is cheap (only the visible
+        samples) so it is rebuilt every frame to scroll smoothly.
+        """
+        sig = self.signal
+        K = max(1, int(self.filter_taps))
+        full = self._noise_full()
+        delay = self._group_delay() if K > 1 else 0.0
+        hist = self.ns_hist
+
+        first_k, last_k = sig.sample_indices_in(-hist + delay, delay)
+        kb = sig.sample_index_at(-hist + delay)
+        look = len(self._decimation_taps()) if K > 1 else 0
+        self._prepare_sd(kb - look - 2, last_k + 2)
+
+        def err_at(k: int) -> float:
+            return sig.clean_value(sig.t_rel_of_index(k) - delay) - self._digital_out_sample(k)
+
+        prev = err_at(kb)
+        noise_pts: List[Tuple[float, float]] = [(self._ns_x(-hist), self._ns_y(prev, full))]
+        dot_pts: List[Tuple[float, float]] = []
+        for k in range(first_k, last_k + 1):
+            t = max(-hist, min(0.0, sig.t_rel_of_index(k) - delay))
+            x = self._ns_x(t)
+            e = err_at(k)
+            ye = self._ns_y(e, full)
+            noise_pts.append((x, self._ns_y(prev, full)))
+            noise_pts.append((x, ye))
+            dot_pts.append((x, ye))
+            prev = e
+        noise_pts.append((self._ns_x(0.0), self._ns_y(prev, full)))
+        items: List = [self._polyline(noise_pts, ERROR, 2.5)]
+        dots = VGroup()
+        for x, y in dot_pts:
+            dots.add(Dot([x, y, 0], radius=0.03, color=SAMPLE))
+        items.append(dots)
+        return items
+
+    def _fft_spectrum(self) -> VMobject:
+        """FFT magnitude of the digital output, drawn as a single filled curve.
+
+        The transform runs over ``fft_size`` samples, so it is recomputed only
+        when a new sample arrives (or a parameter changes) and otherwise reused;
+        the result is a static curve so caching it also keeps per-frame raster
+        cost down despite the large bin count.
+        """
+        sig, q = self.signal, self.quantizer
+        N = int(self.fft_size)
+        K = max(1, int(self.filter_taps))
+        k0 = sig.sample_index_now()
+        key = (
+            k0, N, K, self.adc_mode, q.bits, q.vref, self.sd_dither,
+            round(sig.frequency, 6), round(sig.amplitude, 6),
+            round(sig.sample_period, 6), round(sig.noise_amp, 6),
+            round(sig._phase0, 6), self.pixel_height,
+        )
+        if self._fft_key == key and self._fft_mob is not None:
+            return self._fft_mob
+
+        # Build the digital-output sequence ending at "now". With a decimator
+        # active, filter the raw levels with one vectorised convolution rather
+        # than re-running the FIR per sample.
+        if K > 1:
+            h = self._decimation_taps()
+            L = len(h)
+            gain = self._filter_gain()
+            k_start = k0 - N + 1 - (L - 1)
+            self._prepare_sd(k_start - 2, k0 + 2)
+            raw = np.array([self._raw_level(k) for k in range(k_start, k0 + 1)], dtype=float)
+            d = np.convolve(raw, h)[L - 1: L - 1 + N] / (h.sum() * gain)
+        else:
+            self._prepare_sd(k0 - N + 1 - 2, k0 + 2)
+            d = np.array([self._raw_level(k) for k in range(k0 - N + 1, k0 + 1)], dtype=float)
+
+        win = np.hanning(N)
+        spec = np.fft.rfft(d * win)
+        coherent_gain = win.sum() / 2.0  # so a full-scale sine peaks at 0 dB
+        mag = np.abs(spec) / max(coherent_gain, 1e-9)
+        db = 20.0 * np.log10(mag + 1e-9)
+
+        n_bins = mag.shape[0]
+        base_y = self._fft_y(self.fft_floor_db)
+        # Log frequency axis: bin i maps to f/f_s = i/N; skip DC (i == 0).
+        pts: List[Tuple[float, float]] = [(self._fft_x(0.0), base_y)]
+        for i in range(1, n_bins):
+            x = self._fft_x(self._fft_logfrac(i / float(N)))
+            pts.append((x, self._fft_y(float(db[i]))))
+        pts.append((self._fft_x(1.0), base_y))
+        m = VMobject()
+        m.set_points_as_corners([np.array([x, y, 0.0]) for x, y in pts])
+        m.set_stroke(color=BAR, width=1.5)
+        m.set_fill(color=BAR, opacity=0.35)
+
+        self._fft_mob = m
+        self._fft_key = key
+        return m
+
     # ----------------------------------------------------------------- render
     def _static_mobjects(self) -> List:
         """Static scenery mobjects, cached and rebuilt only when they change."""
-        key = (self.quantizer.bits, self.quantizer.vref, self.pixel_width, self.pixel_height)
+        key = (self.quantizer.bits, self.quantizer.vref, self.pixel_width, self.pixel_height, self.fft_size)
         if self._static_key != key or self._static_mobs is None:
-            self._static_mobs = self._static_left() + self._static_right()
+            self._static_mobs = self._static_left() + self._static_right() + self._static_bottom()
             self._static_key = key
         return self._static_mobs
 
@@ -621,7 +955,12 @@ class AdcScene:
         cached; only the moving content is rebuilt each frame. Everything is
         rasterised in a single pass.
         """
-        mobjects = self._static_mobjects() + self._dynamic_left() + self._dynamic_right()
+        mobjects = (
+            self._static_mobjects()
+            + self._dynamic_left()
+            + self._dynamic_right()
+            + self._dynamic_bottom()
+        )
         self.camera.reset()
         self.camera.capture_mobjects(mobjects)
         return np.asarray(self.camera.pixel_array, dtype=np.uint8).copy()

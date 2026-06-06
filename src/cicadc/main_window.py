@@ -236,7 +236,9 @@ class MainWindow(QWidget):
             "Blue = analog signal (+ car)\n"
             "Pale green = quantizer/modulator out\n"
             "White/gray = digital output (+ car)\n"
-            "Yellow dots = samples"
+            "Yellow dots = samples\n"
+            "Bottom left = quantization noise vs time (now at right)\n"
+            "Bottom right = FFT of digital output (0 dB = FS)"
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#8aa0c8; font-size:11px;")
