@@ -8,7 +8,7 @@ along the bottom show the quantization noise over time (scaled to the LSB) and
 the FFT of the digital output (log frequency axis, 0 dBFS reference).
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 __author__ = "Carsten Wulff"
 __email__ = "carsten@wulff.no"
 
