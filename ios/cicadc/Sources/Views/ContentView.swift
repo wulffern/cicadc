@@ -5,49 +5,43 @@ struct ContentView: View {
     @State private var showControls = false
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                SignalChainBar(params: vm.params)
+        VStack(spacing: 0) {
+            // Slim control row in place of a navigation bar (reclaims the title space).
+            HStack(spacing: 22) {
+                Spacer()
+                Button { vm.togglePlayPause() } label: {
+                    Image(systemName: vm.isPlaying ? "pause.fill" : "play.fill")
+                }
+                Button { showControls.toggle() } label: {
+                    Image(systemName: "slider.horizontal.3")
+                }
+            }
+            .font(.title3)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 4)
 
-                GeometryReader { geo in
-                    if geo.size.width > geo.size.height {
-                        landscapeLayout(geo: geo)
-                    } else {
-                        portraitLayout(geo: geo)
-                    }
+            SignalChainBar(params: vm.params)
+
+            GeometryReader { geo in
+                if geo.size.width > geo.size.height {
+                    landscapeLayout(geo: geo)
+                } else {
+                    portraitLayout(geo: geo)
                 }
             }
-            .navigationTitle("cicadc")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        showControls.toggle()
-                    } label: {
-                        Image(systemName: "slider.horizontal.3")
-                    }
-                }
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        vm.togglePlayPause()
-                    } label: {
-                        Image(systemName: vm.isPlaying ? "pause.fill" : "play.fill")
-                    }
-                }
-            }
-            .sheet(isPresented: $showControls) {
-                NavigationStack {
-                    ControlPanelView(vm: vm)
-                        .navigationTitle("Parameters")
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .confirmationAction) {
-                                Button("Done") { showControls = false }
-                            }
+        }
+        .sheet(isPresented: $showControls) {
+            NavigationStack {
+                ControlPanelView(vm: vm)
+                    .navigationTitle("Parameters")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showControls = false }
                         }
-                }
-                .presentationDetents([.medium, .large])
+                    }
             }
+            .presentationDetents([.medium, .large])
         }
         .preferredColorScheme(.dark)
     }
@@ -103,18 +97,15 @@ struct ContentView: View {
 
     @ViewBuilder
     private func portraitLayout(geo: GeometryProxy) -> some View {
-        let panelH = geo.size.height * 0.35
-        let stripH = geo.size.height * 0.17
-
         VStack(spacing: 4) {
-            // Signal panels
+            // Signal panels take the bulk of the screen.
             HStack(spacing: 4) {
                 analogView()
                 digitalView()
             }
-            .frame(height: panelH)
+            .frame(maxHeight: .infinity)
 
-            // Analysis strips
+            // Analysis strips fill the rest.
             HStack(spacing: 4) {
                 ErrorView(
                     samples: vm.errorSamples,
@@ -127,9 +118,7 @@ struct ContentView: View {
                     sampleRate: vm.params.sampleRate
                 )
             }
-            .frame(height: stripH)
-
-            Spacer(minLength: 0)
+            .frame(height: geo.size.height * 0.30)
         }
         .padding(4)
     }

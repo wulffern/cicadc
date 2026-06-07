@@ -144,7 +144,9 @@ A native iOS / iPadOS port built with SwiftUI lives in `ios/`. It mirrors the
 desktop visualiser: scrolling analog and digital panels with the driving cars, a
 quantization-error strip and a Hann-windowed log-frequency FFT, all driven live
 from a control panel (ADC type, frequency, amplitude, noise, sample period,
-bits, decimation taps, dither, scroll speed).
+bits, decimation taps, dither, scroll speed). The plots use the full screen -
+play/pause and the control panel are reached from a compact top row (no title
+bar), and the layout adapts to portrait and landscape.
 
 The signal processing matches the Python reference: an N-bit uniform quantizer
 or a 1st-/2nd-order single-bit-stable sigma-delta modulator (multi-bit capable,
