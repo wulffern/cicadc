@@ -1,10 +1,13 @@
 import SwiftUI
 
-/// Quantization error vs. time strip.
+/// Quantization error vs. time strip. The band spans ±1 LSB (`fullScale`), so
+/// the error keeps the same relative height whatever the bit depth; the trace is
+/// a sample-and-hold staircase like the digital panel.
 struct ErrorView: View {
     let samples: [(t: Double, v: Double)]
     let tNow: Double
     let visibleDuration: Double
+    var fullScale: Double = 1.0   // value (in FS) at the top/bottom of the band (one LSB)
 
     var body: some View {
         GeometryReader { geo in
@@ -18,25 +21,39 @@ struct ErrorView: View {
                 }
                 .stroke(Color.gray.opacity(0.4), lineWidth: 0.5)
 
-                // Error bars
+                // Error staircase, normalised to ±1 LSB.
                 Path { path in
-                    let tStart = tNow - visibleDuration / 2
-                    for s in samples {
-                        let x = CGFloat((s.t - tStart) / visibleDuration) * geo.size.width
-                        let midY = geo.size.height / 2
-                        let errY = midY - CGFloat(s.v) * geo.size.height * 0.45
-                        path.move(to: CGPoint(x: x, y: midY))
-                        path.addLine(to: CGPoint(x: x, y: errY))
-                    }
+                    buildStaircase(path: &path, size: geo.size)
                 }
                 .stroke(Color.orange, lineWidth: 2)
 
-                Text("Quant. Error")
+                Text("Quant. Error (±1 LSB)")
                     .font(.caption.bold())
                     .foregroundColor(.orange)
                     .padding(4)
             }
             .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    private func buildStaircase(path: inout Path, size: CGSize) {
+        let tStart = tNow - visibleDuration / 2
+        let mid = size.height / 2
+        let half = size.height * 0.45
+        func x(_ t: Double) -> CGFloat { CGFloat((t - tStart) / visibleDuration) * size.width }
+        func y(_ v: Double) -> CGFloat {
+            let n = (v / max(fullScale, 1e-9)).clamped(to: -1...1)
+            return mid - CGFloat(n) * half
+        }
+        var prev: (t: Double, v: Double)?
+        for s in samples {
+            if let p = prev {
+                path.addLine(to: CGPoint(x: x(s.t), y: y(p.v)))
+                path.addLine(to: CGPoint(x: x(s.t), y: y(s.v)))
+            } else {
+                path.move(to: CGPoint(x: x(s.t), y: y(s.v)))
+            }
+            prev = s
         }
     }
 }

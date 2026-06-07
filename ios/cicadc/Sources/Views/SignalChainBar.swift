@@ -7,7 +7,6 @@ struct SignalChainBar: View {
     private var blocks: [(label: String, active: Bool, color: Color)] {
         let noiseActive = params.noiseAmplitude > 0
         let filterActive = params.avgTaps > 1
-        let sdActive = params.adcType != .nyquist
         return [
             ("Analog", true, .green),
             ("Noise", noiseActive, .yellow),

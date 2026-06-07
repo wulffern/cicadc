@@ -52,6 +52,55 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
     }
 
+    // Muted grey-green for the coarse modulator/quantizer output — kept dim so the
+    // white decimated output reads as the primary digital signal.
+    private static let coarseColor = Color(red: 0.46, green: 0.54, blue: 0.46).opacity(0.55)
+
+    /// The analog panel: the (noisy) analog input with the blue car at "now".
+    /// When a decimator is active it also carries the grey digital-output car,
+    /// lagging by the group delay so the reconstruction latency is visible.
+    private func analogView() -> some View {
+        SignalView(
+            samples: vm.analogSamples,
+            tNow: vm.tNow,
+            visibleDuration: 4.0,
+            color: .green,
+            title: "Analog",
+            isStaircase: false,
+            sampleDots: vm.analogSampleDots,
+            trailingCarSamples: vm.hasFilter ? vm.digitalSamples : [],
+            trailingCarDelay: vm.groupDelay
+        )
+    }
+
+    /// The digital panel: a sample-and-hold staircase. When a decimator is active
+    /// it shows the coarse output (pale green) plus the filtered output (white).
+    private func digitalView() -> some View {
+        let primary = vm.hasFilter ? vm.coarseSamples : vm.digitalSamples
+        return SignalView(
+            samples: primary,
+            tNow: vm.tNow,
+            visibleDuration: 4.0,
+            color: vm.hasFilter ? Self.coarseColor : .cyan,
+            title: "Digital",
+            isStaircase: true,
+            overlaySamples: vm.hasFilter ? vm.digitalSamples : [],
+            overlayColor: .white,
+            overlayShowsCar: vm.hasFilter,
+            sampleDots: primary,
+            quantLevels: quantLevels()
+        )
+    }
+
+    /// Reconstruction levels of the uniform quantizer, drawn as a grid on the
+    /// digital panel for Nyquist mode at low bit depths (where they are legible).
+    private func quantLevels() -> [Double] {
+        guard vm.params.adcType == .nyquist, vm.params.bits <= 5 else { return [] }
+        let n = 1 << vm.params.bits
+        let step = 2.0 / Double(n)
+        return (0..<n).map { -1.0 + (Double($0) + 0.5) * step }
+    }
+
     @ViewBuilder
     private func portraitLayout(geo: GeometryProxy) -> some View {
         let panelH = geo.size.height * 0.35
@@ -60,22 +109,8 @@ struct ContentView: View {
         VStack(spacing: 4) {
             // Signal panels
             HStack(spacing: 4) {
-                SignalView(
-                    samples: vm.analogSamples,
-                    tNow: vm.tNow,
-                    visibleDuration: 4.0,
-                    color: .green,
-                    title: "Analog",
-                    isStaircase: false
-                )
-                SignalView(
-                    samples: vm.digitalSamples,
-                    tNow: vm.tNow,
-                    visibleDuration: 4.0,
-                    color: .cyan,
-                    title: "Digital",
-                    isStaircase: vm.params.adcType == .nyquist
-                )
+                analogView()
+                digitalView()
             }
             .frame(height: panelH)
 
@@ -84,7 +119,8 @@ struct ContentView: View {
                 ErrorView(
                     samples: vm.errorSamples,
                     tNow: vm.tNow,
-                    visibleDuration: 4.0
+                    visibleDuration: 4.0,
+                    fullScale: vm.errorFullScale
                 )
                 FFTView(
                     magnitudes: vm.fftMagnitudes,
@@ -102,30 +138,17 @@ struct ContentView: View {
     private func landscapeLayout(geo: GeometryProxy) -> some View {
         HStack(spacing: 4) {
             VStack(spacing: 4) {
-                SignalView(
-                    samples: vm.analogSamples,
-                    tNow: vm.tNow,
-                    visibleDuration: 4.0,
-                    color: .green,
-                    title: "Analog",
-                    isStaircase: false
-                )
+                analogView()
                 ErrorView(
                     samples: vm.errorSamples,
                     tNow: vm.tNow,
-                    visibleDuration: 4.0
+                    visibleDuration: 4.0,
+                    fullScale: vm.errorFullScale
                 )
                 .frame(height: geo.size.height * 0.25)
             }
             VStack(spacing: 4) {
-                SignalView(
-                    samples: vm.digitalSamples,
-                    tNow: vm.tNow,
-                    visibleDuration: 4.0,
-                    color: .cyan,
-                    title: "Digital",
-                    isStaircase: vm.params.adcType == .nyquist
-                )
+                digitalView()
                 FFTView(
                     magnitudes: vm.fftMagnitudes,
                     sampleRate: vm.params.sampleRate

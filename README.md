@@ -138,6 +138,49 @@ make lint     # ruff (if installed)
 make build    # build wheel + sdist
 ```
 
+## iOS app
+
+A native iOS / iPadOS port built with SwiftUI lives in `ios/`. It mirrors the
+desktop visualiser: scrolling analog and digital panels with the driving cars, a
+quantization-error strip and a Hann-windowed log-frequency FFT, all driven live
+from a control panel (ADC type, frequency, amplitude, noise, sample period,
+bits, decimation taps, dither, scroll speed).
+
+The signal processing matches the Python reference: an N-bit uniform quantizer
+or a 1st-/2nd-order single-bit-stable sigma-delta modulator (multi-bit capable,
+optional dither), decimated by a normalised sinc^M (CIC) filter whose in-band
+gain and group delay - plus the modulator's measured in-band signal transfer -
+are de-embedded, so the digital reconstruction and the error strip line up in
+time. A blue car rides the analog signal at "now"; a grey car shows the digital
+output trailing by the decimator's group delay on both panels.
+
+```
+ios/
+  cicadc.xcodeproj
+  cicadc/Sources/
+    cicadcApp.swift          app entry point
+    Models/                  SignalSource, Quantizer, SigmaDelta, Decimator, FFTHelper
+    ViewModels/              ADCViewModel (reactive simulation engine)
+    Views/                   ContentView, SignalView, FFTView, ErrorView, CarMarker, …
+  cicadc/Resources/car.png   car sprite (green chroma-keyed to transparency)
+  cicadc/Assets.xcassets     app icon (the car)
+```
+
+### Build & run
+
+Requires Xcode 17+ (iOS 17.0 deployment target).
+
+- Open `ios/cicadc.xcodeproj`, choose a simulator or your device, and press ⌘R.
+- For a physical device, set **Signing & Capabilities -> Automatically manage
+  signing** and pick your team. The bundle id is `com.carstenwulff.cicadc`; a
+  free Apple ID works (apps then expire after 7 days).
+- Build from the command line (simulator):
+
+  ```bash
+  xcodebuild -project ios/cicadc.xcodeproj -scheme cicadc \
+    -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' build
+  ```
+
 ## Acknowledgements
 
 Big thanks to **Domen Visnar** for the idea behind this project!

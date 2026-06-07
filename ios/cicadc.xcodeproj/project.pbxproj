@@ -20,6 +20,10 @@
 		A011 /* ErrorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F011 /* ErrorView.swift */; };
 		A012 /* ControlPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F012 /* ControlPanelView.swift */; };
 		A013 /* SignalChainBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = F013 /* SignalChainBar.swift */; };
+		A100 /* car.png in Resources */ = {isa = PBXBuildFile; fileRef = F100 /* car.png */; };
+		A101 /* CarMarker.swift in Sources */ = {isa = PBXBuildFile; fileRef = F101 /* CarMarker.swift */; };
+		A102 /* Decimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F102 /* Decimator.swift */; };
+		A103 /* cicadc/Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F103 /* cicadc/Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -36,11 +40,15 @@
 		F011 /* ErrorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorView.swift; sourceTree = "<group>"; };
 		F012 /* ControlPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlPanelView.swift; sourceTree = "<group>"; };
 		F013 /* SignalChainBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalChainBar.swift; sourceTree = "<group>"; };
+		F100 /* car.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = car.png; sourceTree = "<group>"; };
+		F101 /* CarMarker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarMarker.swift; sourceTree = "<group>"; };
+		F102 /* Decimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Decimator.swift; sourceTree = "<group>"; };
+		F103 /* cicadc/Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = cicadc/Assets.xcassets; sourceTree = SOURCE_ROOT; };
 		FAPP /* cicadc.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = cicadc.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		PH_FRAMEWORKS = {
+		PH_FRAMEWORKS /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -50,80 +58,90 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		GRP_ROOT = {
+		GRP_APP /* cicadc */ = {
 			isa = PBXGroup;
 			children = (
-				GRP_APP,
-				GRP_PRODUCTS,
-			);
-			sourceTree = "<group>";
-		};
-		GRP_PRODUCTS = {
-			isa = PBXGroup;
-			children = (
-				FAPP,
-			);
-			name = Products;
-			sourceTree = "<group>";
-		};
-		GRP_APP = {
-			isa = PBXGroup;
-			children = (
-				F001,
-				GRP_MODELS,
-				GRP_VIEWMODELS,
-				GRP_VIEWS,
+				F001 /* cicadcApp.swift */,
+				GRP_MODELS /* Models */,
+				GRP_VIEWMODELS /* ViewModels */,
+				GRP_VIEWS /* Views */,
 			);
 			name = cicadc;
 			path = cicadc/Sources;
 			sourceTree = "<group>";
 		};
-		GRP_MODELS = {
+		GRP_MODELS /* Models */ = {
 			isa = PBXGroup;
 			children = (
-				F004,
-				F005,
-				F006,
-				F007,
-				F008,
+				F004 /* ADCParameters.swift */,
+				F005 /* SignalSource.swift */,
+				F006 /* Quantizer.swift */,
+				F007 /* SigmaDelta.swift */,
+				F008 /* FFTHelper.swift */,
+				F102 /* Decimator.swift */,
 			);
-			name = Models;
 			path = Models;
 			sourceTree = "<group>";
 		};
-		GRP_VIEWMODELS = {
+		GRP_PRODUCTS /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				F003,
+				FAPP /* cicadc.app */,
 			);
-			name = ViewModels;
+			name = Products;
+			sourceTree = "<group>";
+		};
+		GRP_RESOURCES /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				F100 /* car.png */,
+				F103 /* cicadc/Assets.xcassets */,
+			);
+			name = Resources;
+			path = cicadc/Resources;
+			sourceTree = "<group>";
+		};
+		GRP_ROOT = {
+			isa = PBXGroup;
+			children = (
+				GRP_APP /* cicadc */,
+				GRP_RESOURCES /* Resources */,
+				GRP_PRODUCTS /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		GRP_VIEWMODELS /* ViewModels */ = {
+			isa = PBXGroup;
+			children = (
+				F003 /* ADCViewModel.swift */,
+			);
 			path = ViewModels;
 			sourceTree = "<group>";
 		};
-		GRP_VIEWS = {
+		GRP_VIEWS /* Views */ = {
 			isa = PBXGroup;
 			children = (
-				F002,
-				F009,
-				F010,
-				F011,
-				F012,
-				F013,
+				F002 /* ContentView.swift */,
+				F009 /* SignalView.swift */,
+				F010 /* FFTView.swift */,
+				F011 /* ErrorView.swift */,
+				F012 /* ControlPanelView.swift */,
+				F013 /* SignalChainBar.swift */,
+				F101 /* CarMarker.swift */,
 			);
-			name = Views;
 			path = Views;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		TARGET = {
+		TARGET /* cicadc */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = CFG_LIST;
+			buildConfigurationList = CFG_LIST /* Build configuration list for PBXNativeTarget "cicadc" */;
 			buildPhases = (
-				PH_SOURCES,
-				PH_FRAMEWORKS,
-				PH_RESOURCES,
+				PH_SOURCES /* Sources */,
+				PH_FRAMEWORKS /* Frameworks */,
+				PH_RESOURCES /* Resources */,
 			);
 			buildRules = (
 			);
@@ -131,13 +149,13 @@
 			);
 			name = cicadc;
 			productName = cicadc;
-			productReference = FAPP;
+			productReference = FAPP /* cicadc.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		PROJECT = {
+		PROJECT /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
@@ -149,7 +167,7 @@
 					};
 				};
 			};
-			buildConfigurationList = CFG_PROJECT_LIST;
+			buildConfigurationList = CFG_PROJECT_LIST /* Build configuration list for PBXProject "cicadc" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -158,50 +176,54 @@
 				Base,
 			);
 			mainGroup = GRP_ROOT;
-			productRefGroup = GRP_PRODUCTS;
+			productRefGroup = GRP_PRODUCTS /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				TARGET,
+				TARGET /* cicadc */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		PH_RESOURCES = {
+		PH_RESOURCES /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A100 /* car.png in Resources */,
+				A103 /* cicadc/Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		PH_SOURCES = {
+		PH_SOURCES /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A001,
-				A002,
-				A003,
-				A004,
-				A005,
-				A006,
-				A007,
-				A008,
-				A009,
-				A010,
-				A011,
-				A012,
-				A013,
+				A001 /* cicadcApp.swift in Sources */,
+				A002 /* ContentView.swift in Sources */,
+				A003 /* ADCViewModel.swift in Sources */,
+				A004 /* ADCParameters.swift in Sources */,
+				A005 /* SignalSource.swift in Sources */,
+				A006 /* Quantizer.swift in Sources */,
+				A007 /* SigmaDelta.swift in Sources */,
+				A008 /* FFTHelper.swift in Sources */,
+				A009 /* SignalView.swift in Sources */,
+				A010 /* FFTView.swift in Sources */,
+				A011 /* ErrorView.swift in Sources */,
+				A012 /* ControlPanelView.swift in Sources */,
+				A013 /* SignalChainBar.swift in Sources */,
+				A101 /* CarMarker.swift in Sources */,
+				A102 /* Decimator.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
-		CFG_DEBUG = {
+		CFG_DEBUG /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -263,7 +285,7 @@
 			};
 			name = Debug;
 		};
-		CFG_RELEASE = {
+		CFG_RELEASE /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -317,13 +339,14 @@
 			};
 			name = Release;
 		};
-		CFG_TARGET_DEBUG = {
+		CFG_TARGET_DEBUG /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
+				DEVELOPMENT_TEAM = KES7YJW6T7;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -336,7 +359,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.cicadc.ios;
+				PRODUCT_BUNDLE_IDENTIFIER = com.carstenwulff.cicadc;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -344,13 +367,14 @@
 			};
 			name = Debug;
 		};
-		CFG_TARGET_RELEASE = {
+		CFG_TARGET_RELEASE /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
+				DEVELOPMENT_TEAM = KES7YJW6T7;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -363,7 +387,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.cicadc.ios;
+				PRODUCT_BUNDLE_IDENTIFIER = com.carstenwulff.cicadc;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -374,26 +398,25 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		CFG_LIST = {
+		CFG_LIST /* Build configuration list for PBXNativeTarget "cicadc" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				CFG_TARGET_DEBUG,
-				CFG_TARGET_RELEASE,
+				CFG_TARGET_DEBUG /* Debug */,
+				CFG_TARGET_RELEASE /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		CFG_PROJECT_LIST = {
+		CFG_PROJECT_LIST /* Build configuration list for PBXProject "cicadc" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				CFG_DEBUG,
-				CFG_RELEASE,
+				CFG_DEBUG /* Debug */,
+				CFG_RELEASE /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
 	};
-	rootObject = PROJECT;
+	rootObject = PROJECT /* Project object */;
 }

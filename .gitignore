@@ -76,3 +76,10 @@ venv.bak/
 # OS
 .DS_Store
 Thumbs.db
+
+# Xcode user-specific state (not the project itself)
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad/
+ios/build/
+ios/DerivedData/
