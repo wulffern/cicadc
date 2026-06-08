@@ -37,8 +37,9 @@ h1 { color: var(--curve); font-size: 16px; letter-spacing: 4px; padding: 4px 0; 
 .cb.on { border-color: var(--curve); color: var(--curve); background: #0d1830; }
 .ca { color: var(--edge); font-size: 10px; }
 canvas {
-  display: block; width: 100%; max-width: 1200px;
+  display: block;
   background: var(--bg); border: 1px solid var(--edge);
+  max-width: 100%; /* fallback before JS runs */
 }
 #ctrl {
   width: 100%; max-width: 1200px;
@@ -79,6 +80,13 @@ canvas {
 .leg { display: flex; align-items: center; gap: 5px; }
 .lsw { width: 20px; height: 3px; border-radius: 2px; }
 .ldot { width: 8px; height: 8px; border-radius: 50%; }
+@media (max-width: 700px) {
+  body  { padding: 4px 4px 20px; gap: 4px; }
+  #ctrl { grid-template-columns: 1fr 1fr; }
+  .cb   { font-size: 8px; padding: 2px 1px; letter-spacing: 0; }
+  .ca   { font-size: 8px; }
+  .cr label { min-width: 70px; }
+}
 </style>
 </head>
 <body>
@@ -184,18 +192,60 @@ canvas {
 // ─── Canvas ───────────────────────────────────────────────────────────────────
 const cv = document.getElementById('c');
 const cx = cv.getContext('2d');
-const CW = 1200, CH = 780;
+let CW = 1200, CH = 780;
 
-// ─── Layout (canvas pixels) ───────────────────────────────────────────────────
-const LP = {x0: 10,  y0: 35,  x1: 590,  y1: 530};   // left  – analog
-const RP = {x0: 610, y0: 35,  x1: 1190, y1: 530};   // right – digital
-const NP = {x0: 10,  y0: 548, x1: 590,  y1: 770};   // noise strip
-const FP = {x0: 610, y0: 548, x1: 1190, y1: 770};   // FFT strip
+// ─── Layout (canvas pixels) — recomputed by updateLayout() ───────────────────
+let LP, RP, NP, FP;
+let pxf = 1;   // panel pixel scale factor relative to 580 px reference width
+let DPR = 1;   // device pixel ratio
 
 const pcx = p => (p.x0 + p.x1) / 2;
 const pcy = p => (p.y0 + p.y1) / 2;
 const pw  = p => p.x1 - p.x0;
 const ph  = p => p.y1 - p.y0;
+
+// ─── Responsive canvas ────────────────────────────────────────────────────────
+function updateLayout() {
+  const mobile = CW < 700;
+  if (mobile) {
+    const x0 = 10, x1 = CW - 10;
+    const phMain  = Math.round(CW * 0.58);
+    const phStrip = Math.round(CW * 0.30);
+    const gap = 16;
+    LP = {x0, y0: 38,          x1, y1: 38 + phMain};
+    RP = {x0, y0: LP.y1 + gap, x1, y1: LP.y1 + gap + phMain};
+    NP = {x0, y0: RP.y1 + gap, x1, y1: RP.y1 + gap + phStrip};
+    FP = {x0, y0: NP.y1 + gap, x1, y1: NP.y1 + gap + phStrip};
+  } else {
+    const sX = Math.round(CW * 590 / 1200);
+    const sY = Math.round(CH * 530 / 780);
+    const gX = Math.round(CW * 610 / 1200);
+    const bY = Math.round(CH * 548 / 780);
+    LP = {x0: 10,  y0: 35, x1: sX,    y1: sY};
+    RP = {x0: gX,  y0: 35, x1: CW-10, y1: sY};
+    NP = {x0: 10,  y0: bY, x1: sX,    y1: CH-10};
+    FP = {x0: gX,  y0: bY, x1: CW-10, y1: CH-10};
+  }
+  pxf = Math.max(0.58, Math.min(pw(LP), pw(RP)) / 580);
+}
+
+function resizeCanvas() {
+  DPR = window.devicePixelRatio || 1;
+  const mobile = window.innerWidth < 700;
+  CW = Math.min(1200, window.innerWidth - 20);
+  if (mobile) {
+    const phMain  = Math.round(CW * 0.58);
+    const phStrip = Math.round(CW * 0.30);
+    CH = 38 + 2 * phMain + 2 * phStrip + 3 * 16 + 10;
+  } else {
+    CH = Math.round(CW * 780 / 1200);
+  }
+  cv.width  = Math.round(CW * DPR);
+  cv.height = Math.round(CH * DPR);
+  cv.style.width  = CW + 'px';
+  cv.style.height = CH + 'px';
+  updateLayout();
+}
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const S = {
@@ -501,14 +551,15 @@ function drawCar(x, y, angle, variant, alpha) {
   cx.globalAlpha = alpha == null ? 1 : alpha;
   cx.translate(x, y);
   cx.rotate(angle);
+  const drawSize = Math.max(16, CAR_SIZE * pxf);
   if (carReady && carSprites[variant]) {
-    const s = CAR_SIZE / 2;
-    cx.drawImage(carSprites[variant], -s, -s, CAR_SIZE, CAR_SIZE);
+    const s = drawSize / 2;
+    cx.drawImage(carSprites[variant], -s, -s, drawSize, drawSize);
   } else {
     // Triangle: vertex at top → points up at angle=0
     const col = {blue:'#3361e6', green:'#b6e3b6', gray:'#cdd6e6'}[variant] || '#cdd6e6';
     cx.fillStyle = col;
-    const h = CAR_SIZE * 0.5, w = CAR_SIZE * 0.38;
+    const h = drawSize * 0.5, w = drawSize * 0.38;
     cx.beginPath();
     cx.moveTo(0, -h); cx.lineTo(-w, h * 0.6); cx.lineTo(w, h * 0.6); cx.closePath();
     cx.fill();
@@ -531,38 +582,46 @@ function panelBg(p) {
 function panelGrid(p) {
   // Quantisation threshold lines (L+1 vertical lines at bin boundaries)
   const L = 1 << S.bits, step = 2 * S.vref / L;
-  cx.strokeStyle = '#1d2742'; cx.lineWidth = 0.5;
+  cx.strokeStyle = '#1d2742'; cx.lineWidth = Math.max(0.3, 0.5 * pxf);
   for (let i = 0; i <= L; i++) {
     const x = vX(p, -S.vref + i * step);
     cx.beginPath(); cx.moveTo(x, p.y0); cx.lineTo(x, p.y1); cx.stroke();
   }
   // Zero-amplitude axis
-  cx.strokeStyle = '#3b5090'; cx.lineWidth = 1;
+  cx.strokeStyle = '#3b5090'; cx.lineWidth = Math.max(0.5, pxf);
   cx.beginPath(); cx.moveTo(vX(p,0), p.y0); cx.lineTo(vX(p,0), p.y1); cx.stroke();
   // Horizontal time-grid lines (every second)
-  cx.strokeStyle = '#1d2742'; cx.lineWidth = 0.5;
+  cx.strokeStyle = '#1d2742'; cx.lineWidth = Math.max(0.3, 0.5 * pxf);
   for (let t = -Math.ceil(S.win/2); t <= Math.ceil(S.win/2); t++) {
     const y = tY(p, t);
     cx.beginPath(); cx.moveTo(p.x0, y); cx.lineTo(p.x1, y); cx.stroke();
   }
   // "Now" dashed line
-  cx.strokeStyle = '#ffd400'; cx.lineWidth = 1; cx.setLineDash([5,5]);
+  cx.strokeStyle = '#ffd400'; cx.lineWidth = Math.max(0.5, pxf); cx.setLineDash([5*pxf,5*pxf]);
   cx.beginPath(); cx.moveTo(p.x0+2, tY(p,0)); cx.lineTo(p.x1-2, tY(p,0)); cx.stroke();
   cx.setLineDash([]);
 }
 
 function panelLabels(p, title, titleColor) {
-  cx.fillStyle = titleColor; cx.font = 'bold 11px monospace'; cx.textAlign = 'center';
-  cx.fillText(title, pcx(p), p.y0 - 8);
-  cx.fillStyle = '#506070'; cx.font = '9px monospace';
+  const fMain = Math.max(7, Math.round(11 * pxf));
+  const fSub  = Math.max(6, Math.round(9  * pxf));
+  cx.fillStyle = titleColor;
+  cx.font = `bold ${fMain}px monospace`;
+  cx.textAlign = 'center';
+  cx.fillText(title, pcx(p), p.y0 - Math.round(7 * pxf));
+  cx.fillStyle = '#506070';
+  cx.font = `${fSub}px monospace`;
   cx.textAlign = 'left';
-  cx.fillText('↑ future', p.x0+5, p.y0+14);
-  cx.fillText('↓ past',   p.x0+5, p.y1-5);
-  cx.fillText('now',      p.x0+5, tY(p,0)-4);
-  cx.fillStyle = '#506070'; cx.textAlign = 'center';
-  cx.fillText('+FS', vX(p, S.vref),  p.y1+11);
-  cx.fillText('0',   vX(p, 0),       p.y1+11);
-  cx.fillText('−FS', vX(p, -S.vref), p.y1+11);
+  cx.fillText('↑ future', p.x0 + Math.round(5*pxf), p.y0 + Math.round(12*pxf));
+  cx.fillText('↓ past',   p.x0 + Math.round(5*pxf), p.y1 - Math.round(4*pxf));
+  cx.fillText('now',      p.x0 + Math.round(5*pxf), tY(p,0) - Math.round(3*pxf));
+  // FS axis labels below panel — only when there's enough room
+  if (pxf > 0.75) {
+    cx.textAlign = 'center';
+    cx.fillText('+FS', vX(p, S.vref),  p.y1 + Math.round(11*pxf));
+    cx.fillText('0',   vX(p, 0),       p.y1 + Math.round(11*pxf));
+    cx.fillText('−FS', vX(p, -S.vref), p.y1 + Math.round(11*pxf));
+  }
 }
 
 // ─── Analog panel ─────────────────────────────────────────────────────────────
@@ -575,7 +634,7 @@ function drawAnalog() {
   const half = S.win / 2;
 
   // Smooth analog curve
-  cx.strokeStyle = '#3361e6'; cx.lineWidth = 2.5;
+  cx.strokeStyle = '#3361e6'; cx.lineWidth = Math.max(1, 2.5 * pxf);
   cx.beginPath();
   for (let i = 0, N = 400; i <= N; i++) {
     const tr = -half + i * S.win / N;
@@ -592,9 +651,9 @@ function drawAnalog() {
     const tr = k * S.Ts - S.t;
     const y  = tY(LP, tr);
     cx.fillStyle = '#ffd400';
-    cx.beginPath(); cx.arc(vX(LP, cleanSig(k*S.Ts)), y, 3.5, 0, 2*Math.PI); cx.fill();
+    cx.beginPath(); cx.arc(vX(LP, cleanSig(k*S.Ts)), y, Math.max(1.5, 3.5*pxf), 0, 2*Math.PI); cx.fill();
     cx.fillStyle = 'rgba(182,227,182,0.55)';
-    cx.beginPath(); cx.arc(vX(LP, rawOut(k)), y, 3, 0, 2*Math.PI); cx.fill();
+    cx.beginPath(); cx.arc(vX(LP, rawOut(k)), y, Math.max(1.5, 3*pxf), 0, 2*Math.PI); cx.fill();
   }
 
   const kNow = Math.floor(S.t / S.Ts);
@@ -626,7 +685,7 @@ function drawDigital() {
     for (let k = k0; k <= k1; k++) {
       cx.fillStyle = 'rgba(182,227,182,0.4)';
       cx.beginPath();
-      cx.arc(vX(RP, rawOut(k)), tY(RP, k*S.Ts - S.t), 2.5, 0, 2*Math.PI);
+      cx.arc(vX(RP, rawOut(k)), tY(RP, k*S.Ts - S.t), Math.max(1, 2.5*pxf), 0, 2*Math.PI);
       cx.fill();
     }
   }
@@ -635,7 +694,7 @@ function drawDigital() {
   // so the post-filter output is visually distinct from the oversampled raw output.
   // For Nyquist (no filter) each sample is one step as usual.
   const K = (S.mode !== 'nyquist' && S.taps > 1) ? S.taps : 1;
-  cx.strokeStyle = '#cdd6e6'; cx.lineWidth = 2;
+  cx.strokeStyle = '#cdd6e6'; cx.lineWidth = Math.max(1, 2 * pxf);
   cx.beginPath();
   let started = false;
   const kd0 = Math.floor(k0 / K);
@@ -663,8 +722,12 @@ function drawDigital() {
 function drawNoise() {
   const p = NP;
   panelBg(p);
-  cx.fillStyle = '#6090b0'; cx.font = 'bold 10px monospace'; cx.textAlign = 'center';
-  cx.fillText('QUANTISATION ERROR — ADC output vs analog input  (pre-filter)', pcx(p), p.y0-5);
+  const fNoise = Math.max(7, Math.round(10 * pxf));
+  cx.fillStyle = '#6090b0'; cx.font = `bold ${fNoise}px monospace`; cx.textAlign = 'center';
+  const noiseTitle = pxf > 0.75
+    ? 'QUANTISATION ERROR — ADC output vs analog input  (pre-filter)'
+    : 'QUANT ERROR (pre-filter)';
+  cx.fillText(noiseTitle, pcx(p), p.y0 - Math.round(5*pxf));
   cx.save(); clip(p);
 
   const kNow  = Math.floor(S.t / S.Ts);
@@ -675,11 +738,11 @@ function drawNoise() {
   const yScl  = ph(p) * 0.42;  // maps ±1 FS to ±42 % of strip height
 
   // Zero line
-  cx.strokeStyle = '#3b5090'; cx.lineWidth = 1;
+  cx.strokeStyle = '#3b5090'; cx.lineWidth = Math.max(0.5, pxf);
   cx.beginPath(); cx.moveTo(p.x0, yCen); cx.lineTo(p.x1, yCen); cx.stroke();
 
   // ±½ LSB and ±1 LSB reference dashes
-  cx.strokeStyle = '#1d2742'; cx.lineWidth = 0.5; cx.setLineDash([4,4]);
+  cx.strokeStyle = '#1d2742'; cx.lineWidth = Math.max(0.3, 0.5*pxf); cx.setLineDash([4*pxf,4*pxf]);
   for (const f of [0.5, 1, -0.5, -1]) {
     const y = yCen - f * lsb * yScl;
     cx.beginPath(); cx.moveTo(p.x0, y); cx.lineTo(p.x1, y); cx.stroke();
@@ -690,7 +753,7 @@ function drawNoise() {
   const xOf = k => p.x0 + (k * S.Ts - (S.t - tSpan)) / tSpan * pw(p);
 
   // Error staircase: error is constant between sample instants
-  cx.strokeStyle = '#ff4444'; cx.lineWidth = 1.5;
+  cx.strokeStyle = '#ff4444'; cx.lineWidth = Math.max(0.8, 1.5*pxf);
   cx.beginPath();
   let started = false;
   for (let k = k0; k <= kNow; k++) {
@@ -704,13 +767,13 @@ function drawNoise() {
   cx.stroke();
 
   // "Now" marker (right edge)
-  cx.strokeStyle = '#ffd400'; cx.lineWidth = 1; cx.setLineDash([4,3]);
+  cx.strokeStyle = '#ffd400'; cx.lineWidth = Math.max(0.5, pxf); cx.setLineDash([4*pxf,3*pxf]);
   cx.beginPath(); cx.moveTo(p.x1, p.y0); cx.lineTo(p.x1, p.y1); cx.stroke();
   cx.setLineDash([]);
 
-  cx.fillStyle = '#506070'; cx.font = '9px monospace'; cx.textAlign = 'left';
-  cx.fillText('+1 LSB', p.x0+3, yCen - lsb*yScl - 2);
-  cx.fillText('−1 LSB', p.x0+3, yCen + lsb*yScl + 9);
+  cx.fillStyle = '#506070'; cx.font = `${Math.max(6, Math.round(9*pxf))}px monospace`; cx.textAlign = 'left';
+  cx.fillText('+1 LSB', p.x0 + Math.round(3*pxf), yCen - lsb*yScl - Math.round(2*pxf));
+  cx.fillText('−1 LSB', p.x0 + Math.round(3*pxf), yCen + lsb*yScl + Math.round(9*pxf));
   cx.restore();
 }
 
@@ -718,8 +781,10 @@ function drawNoise() {
 function drawFFT() {
   const p = FP;
   panelBg(p);
-  cx.fillStyle = '#6090b0'; cx.font = 'bold 10px monospace'; cx.textAlign = 'center';
-  cx.fillText('FFT SPECTRUM  (Hann 512-pt, dBFS, log-freq axis)', pcx(p), p.y0-5);
+  const fFFT = Math.max(7, Math.round(10 * pxf));
+  cx.fillStyle = '#6090b0'; cx.font = `bold ${fFFT}px monospace`; cx.textAlign = 'center';
+  const fftTitle = pxf > 0.75 ? 'FFT SPECTRUM  (Hann 512-pt, dBFS, log-freq axis)' : 'FFT (Hann 512, dBFS)';
+  cx.fillText(fftTitle, pcx(p), p.y0 - Math.round(5*pxf));
   cx.save(); clip(p);
 
   if (!fftMag) { cx.restore(); return; }
@@ -733,24 +798,24 @@ function drawFFT() {
   const floor = -80;
 
   // dB grid lines
-  cx.strokeStyle = '#1d2742'; cx.lineWidth = 0.5;
+  cx.strokeStyle = '#1d2742'; cx.lineWidth = Math.max(0.3, 0.5*pxf);
   for (const db of [-20, -40, -60, -80]) {
     const y = p.y1 - (db - floor) / -floor * ph(p);
     cx.beginPath(); cx.moveTo(p.x0, y); cx.lineTo(p.x1, y); cx.stroke();
-    cx.fillStyle = '#506070'; cx.font = '9px monospace'; cx.textAlign = 'left';
-    cx.fillText(`${db} dB`, p.x0+3, y-2);
+    cx.fillStyle = '#506070'; cx.font = `${Math.max(6, Math.round(9*pxf))}px monospace`; cx.textAlign = 'left';
+    cx.fillText(`${db} dB`, p.x0 + Math.round(3*pxf), y - Math.round(2*pxf));
   }
 
   // Frequency tick marks
-  cx.fillStyle = '#506070'; cx.font = '9px monospace'; cx.textAlign = 'center';
+  cx.fillStyle = '#506070'; cx.font = `${Math.max(6, Math.round(9*pxf))}px monospace`; cx.textAlign = 'center';
   for (const f of [0.05,0.1,0.2,0.5,1,2,5,10,20,50,100]) {
     if (f < fMin || f > fNyq) continue;
     const x = p.x0 + (Math.log10(f) - lgMin) / lgR * pw(p);
-    cx.strokeStyle = '#1d2742'; cx.lineWidth = 0.5;
+    cx.strokeStyle = '#1d2742'; cx.lineWidth = Math.max(0.3, 0.5*pxf);
     cx.beginPath(); cx.moveTo(x, p.y0); cx.lineTo(x, p.y1); cx.stroke();
-    cx.fillText(f >= 1 ? `${f}` : `${f}`, x, p.y1+11);
+    cx.fillText(`${f}`, x, p.y1 + Math.round(11*pxf));
   }
-  cx.fillText('Hz', p.x1-2, p.y1+11);
+  cx.fillText('Hz', p.x1 - Math.round(2*pxf), p.y1 + Math.round(11*pxf));
 
   // Bars
   for (let i = 1; i < FFT_N >> 1; i++) {
@@ -772,6 +837,7 @@ function drawFFT() {
 
 // ─── Main render ──────────────────────────────────────────────────────────────
 function render() {
+  cx.setTransform(DPR, 0, 0, DPR, 0, 0);
   cx.clearRect(0, 0, CW, CH);
   updateFFT(Math.floor(S.t / S.Ts));
   drawAnalog();
@@ -792,7 +858,9 @@ function loop(ts) {
   render();
   requestAnimationFrame(loop);
 }
+resizeCanvas();
 requestAnimationFrame(loop);
+window.addEventListener('resize', resizeCanvas);
 
 // ─── Control handlers ─────────────────────────────────────────────────────────
 function invalidateSD() {
