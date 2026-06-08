@@ -166,9 +166,9 @@ canvas {
     <div class="cgt">FILTER (ΣΔ)</div>
     <div class="cr">
       <label>Filter taps K</label>
-      <input type="range" id="sl-taps" min="1" max="64" step="1" value="4"
+      <input type="range" id="sl-taps" min="1" max="64" step="1" value="1"
              oninput="setTaps(+this.value)">
-      <span class="v" id="v-taps">4</span>
+      <span class="v" id="v-taps">1</span>
     </div>
     <div style="color:var(--muted);font-size:10px;line-height:1.7;margin-top:2px;">
       Sinc<sup>M</sup> decimator (M = order+1)<br>
@@ -188,6 +188,14 @@ canvas {
 
 <script>
 'use strict';
+
+// ─── REFERENCE ────────────────────────────────────────────────────────────────
+// The Python source in src/cicadc/ is the authoritative reference implementation.
+// When verifying or extending ADC / signal / filter behaviour, consult:
+//   src/cicadc/sigma_delta.py   – SD1 and SD2 modulator recursions and quantizer
+//   src/cicadc/manim_scene.py   – decimation filter, _filter_gain, staircase drawing
+//   src/cicadc/quantizer.py     – mid-tread Nyquist quantizer
+//   src/cicadc/signal_source.py – sinusoid + value-noise model
 
 // ─── Canvas ───────────────────────────────────────────────────────────────────
 const cv = document.getElementById('c');
@@ -256,7 +264,7 @@ const S = {
   bits:   3,
   Ts:     0.25,
   noise:  0.0,
-  taps:   4,
+  taps:   1,   // Python default is also 1 (no filter); raise to see decimation
   mode:   'nyquist',
   dither: false,
   paused: false,
@@ -402,13 +410,32 @@ function getFIR() {
   return h;
 }
 
+// Magnitude of the sinc^M filter at the current signal frequency.
+// Matches Python's _filter_gain() (minus the modulator STF term — for SD2 the
+// Python also measures |STF(e^jw)| via a lock-in and divides it out, correcting
+// the 2nd-order loop's in-band gain deviation. We approximate |STF|=1 here).
+// Reference: src/cicadc/manim_scene.py  _filter_gain()
+function filtGain() {
+  const K = S.taps;
+  if (K <= 1) return 1.0;
+  const M  = S.mode === 'nyquist' ? 1 : S.mode === 'sigma_delta' ? 2 : 3;
+  const w  = 2 * Math.PI * S.freq * S.Ts;   // digital angular frequency (rad/sample)
+  const sw = Math.sin(w / 2);
+  if (Math.abs(sw) < 1e-9) return 1.0;       // signal near DC → gain is already 1
+  const mag = Math.pow(Math.abs(Math.sin(K * w / 2) / (K * sw)), M);
+  return Math.max(mag, 0.05);                 // clamp away from filter nulls
+}
+
 function filtOut(k) {
   if (S.taps <= 1 || S.mode === 'nyquist') return rawOut(k);
   const h    = getFIR();
-  const hSum = h.reduce((a, b) => a + b, 0);  // = K^M
+  const hSum = h.reduce((a, b) => a + b, 0);  // = K^M (DC gain)
   let acc = 0;
   for (let j = 0; j < h.length; j++) acc += h[j] * rawOut(k - j);
-  return acc / hSum;
+  // Divide by hSum (DC normalisation) then by filtGain (frequency-domain correction
+  // so the in-band amplitude of the staircase matches the analog signal).
+  // Reference: src/cicadc/manim_scene.py  _filt_level()
+  return (acc / hSum) / filtGain();
 }
 
 // ─── FFT (Cooley-Tukey radix-2, in-place) ────────────────────────────────────
