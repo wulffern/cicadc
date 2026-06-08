@@ -392,6 +392,7 @@ function rawOut(k) {
 // Composite FIR h = [1]*K convolved M times.  sum(h) = K^M (the DC gain).
 // Matches Python's _decimation_taps() and _filt_level().
 let firH = null, firKey = '';
+let stfCache = null, stfKey = '';
 
 function getFIR() {
   const K = Math.max(1, S.taps);
@@ -410,20 +411,59 @@ function getFIR() {
   return h;
 }
 
-// Magnitude of the sinc^M filter at the current signal frequency.
-// Matches Python's _filter_gain() (minus the modulator STF term — for SD2 the
-// Python also measures |STF(e^jw)| via a lock-in and divides it out, correcting
-// the 2nd-order loop's in-band gain deviation. We approximate |STF|=1 here).
-// Reference: src/cicadc/manim_scene.py  _filter_gain()
+// Hann-windowed DFT lock-in of the modulator output vs the clean reference sine
+// at the signal frequency.  Returns |STF(e^jw)| — the in-band gain of the SD
+// loop itself (not the decimation filter).  For SD1 this is ≈1; for SD2 it dips
+// below 1 and must be divided out so the reconstructed amplitude is correct.
+// Cached by modulator parameters; cleared by invalidateSD().
+// Matches Python's _modulator_stf() in src/cicadc/manim_scene.py.
+function modSTFmag() {
+  if (S.mode === 'nyquist' || S.taps <= 1) return 1.0;
+  const w = 2 * Math.PI * S.freq * S.Ts;
+  if (Math.abs(w) < 1e-6) return 1.0;
+
+  const key = `${S.mode}|${S.bits}|${S.dither}|${S.freq.toFixed(6)}|${S.amp.toFixed(6)}|${S.Ts.toFixed(6)}`;
+  if (key === stfKey && stfCache !== null) return stfCache;
+
+  const sampPerCycle = 1.0 / Math.max(S.freq * S.Ts, 1e-9);
+  const n  = Math.min(Math.max(Math.round(sampPerCycle * 24), 64), 4000);
+  const k0 = Math.floor(S.t / S.Ts);
+
+  let numRe = 0, numIm = 0, denRe = 0, denIm = 0;
+  for (let i = 0; i < n; i++) {
+    const k   = k0 - n + 1 + i;
+    const t   = k * S.Ts;
+    const wt  = 2 * Math.PI * S.freq * t;
+    const hw  = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (n - 1));  // Hann
+    const cw  = Math.cos(-wt);   // Re(exp(-j*w*t))
+    const sw2 = Math.sin(-wt);   // Im(exp(-j*w*t))
+    const y   = rawOut(k);
+    const r   = cleanSig(t);
+    numRe += y * hw * cw;  numIm += y * hw * sw2;
+    denRe += r * hw * cw;  denIm += r * hw * sw2;
+  }
+
+  const denMag = Math.sqrt(denRe*denRe + denIm*denIm);
+  const numMag = Math.sqrt(numRe*numRe + numIm*numIm);
+  const stf = denMag > 1e-12 ? numMag / denMag : 1.0;
+  stfCache = Math.max(stf, 0.1);
+  stfKey   = key;
+  return stfCache;
+}
+
+// Magnitude of the full signal path at the signal frequency: sinc^M × |STF|.
+// Dividing filtOut by this makes the in-band transfer unity so the staircase
+// amplitude matches the analog signal.
+// Matches Python's _filter_gain() in src/cicadc/manim_scene.py.
 function filtGain() {
   const K = S.taps;
   if (K <= 1) return 1.0;
   const M  = S.mode === 'nyquist' ? 1 : S.mode === 'sigma_delta' ? 2 : 3;
-  const w  = 2 * Math.PI * S.freq * S.Ts;   // digital angular frequency (rad/sample)
+  const w  = 2 * Math.PI * S.freq * S.Ts;
   const sw = Math.sin(w / 2);
-  if (Math.abs(sw) < 1e-9) return 1.0;       // signal near DC → gain is already 1
-  const mag = Math.pow(Math.abs(Math.sin(K * w / 2) / (K * sw)), M);
-  return Math.max(mag, 0.05);                 // clamp away from filter nulls
+  if (Math.abs(sw) < 1e-9) return 1.0;
+  const sincM = Math.pow(Math.abs(Math.sin(K * w / 2) / (K * sw)), M);
+  return Math.max(sincM * modSTFmag(), 0.05);
 }
 
 function filtOut(k) {
@@ -893,6 +933,7 @@ window.addEventListener('resize', resizeCanvas);
 function invalidateSD() {
   c1.clear(); c2.clear(); cKey = '';
   firH = null; firKey = '';
+  stfCache = null; stfKey = '';
   resetFFTBuf();
 }
 
