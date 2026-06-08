@@ -29,7 +29,7 @@ from manim import (
 )
 
 from .quantizer import Quantizer
-from .sigma_delta import SigmaDelta1, SigmaDelta2
+from .sigma_delta import SigmaDelta1, SigmaDelta2, Leapfrog
 from .signal_source import SignalSource
 
 _ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
@@ -77,6 +77,9 @@ class AdcScene:
                 input_fn=_input_fn, bits=self.quantizer.bits, vref=self.quantizer.vref
             ),
             "sigma_delta2": SigmaDelta2(
+                input_fn=_input_fn, bits=self.quantizer.bits, vref=self.quantizer.vref
+            ),
+            "leapfrog": Leapfrog(
                 input_fn=_input_fn, bits=self.quantizer.bits, vref=self.quantizer.vref
             ),
         }
@@ -707,8 +710,9 @@ class AdcScene:
         # Subtitle (changes with bits / averaging / ADC mode).
         sd = self._modulator()
         if sd is not None:
-            ordinal = {1: "1st", 2: "2nd"}.get(sd.order, f"{sd.order}th")
-            sub_text = f"{ordinal}-order \u03a3\u0394  -  {q.bits}-bit"
+            ordinal = {1: "1st", 2: "2nd", 3: "3rd"}.get(sd.order, f"{sd.order}th")
+            label = "leapfrog" if self.adc_mode == "leapfrog" else "\u03a3\u0394"
+            sub_text = f"{ordinal}-order {label}  -  {q.bits}-bit"
         else:
             sub_text = f"{q.bits} bits  -  {q.num_levels} levels"
         if K > 1:
