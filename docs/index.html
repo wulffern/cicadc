@@ -467,7 +467,7 @@ function filtGain() {
 }
 
 function filtOut(k) {
-  if (S.taps <= 1 || S.mode === 'nyquist') return rawOut(k);
+  if (S.taps <= 1) return rawOut(k);
   const h    = getFIR();
   const hSum = h.reduce((a, b) => a + b, 0);  // = K^M (DC gain)
   let acc = 0;
@@ -760,7 +760,7 @@ function drawDigital() {
   // Staircase: for SD modes draw at the decimated rate (one step per K samples)
   // so the post-filter output is visually distinct from the oversampled raw output.
   // For Nyquist (no filter) each sample is one step as usual.
-  const K = (S.mode !== 'nyquist' && S.taps > 1) ? S.taps : 1;
+  const K = S.taps > 1 ? S.taps : 1;
   cx.strokeStyle = '#cdd6e6'; cx.lineWidth = Math.max(1, 2 * pxf);
   cx.beginPath();
   let started = false;
