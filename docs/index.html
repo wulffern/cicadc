@@ -747,18 +747,43 @@ function drawAnalog() {
 
   // Ghost car (pale-green, 60% opacity): raw ADC level at "now"
   drawCar(vX(LP, rawOut(kNow)), yNow, ang, 'green', 0.60);
-  // Gray car: decimated filter output, shown at the group-delay offset in the past
+  // Gray car: filtered output, shown delay-compensated in the past so its
+  // latency is visible yet it still lands on the analog curve. The filter
+  // output at sample k represents analog time t_rel_of_index(k) − D, so to
+  // show it at visual time −dVis we evaluate filtOut at index for time D−dVis.
+  // Reference: src/cicadc/manim_scene.py  _digital_car_anchor()
   if (S.taps > 1) {
-    const D       = groupDelay();
-    const dVis    = Math.min(D, 0.82 * S.win / 2);  // clamp to visible window
-    const K       = S.taps;
-    const kDec    = Math.floor(kNow / K) * K;
-    drawCar(vX(LP, filtOut(kDec)), tY(LP, -dVis), curveAngle(-dVis), 'gray', 1.0);
+    const D    = groupDelay();
+    const dVis = Math.min(D, 0.82 * S.win / 2);  // clamp to visible window
+    const kVis = Math.floor((S.t + D - dVis) / S.Ts);
+    drawCar(vX(LP, filtOut(kVis)), tY(LP, -dVis), curveAngle(-dVis), 'gray', 1.0);
   }
   // Blue car: clean analog value at "now"
   drawCar(vX(LP, cleanSig(S.t)), yNow, ang, 'blue', 1.0);
 
   cx.restore();
+}
+
+// Sample-and-hold staircase on panel p, stepping at EVERY sample (not decimated).
+// levelFn(k) gives the amplitude; the trace is shifted back in time by `delay`
+// seconds so a filtered output lines up with the analog signal it represents.
+// Time is on the Y axis, value on X: holding a value = vertical, a step = horizontal.
+// Reference: src/cicadc/manim_scene.py  _hold_staircase()
+function holdStaircase(p, levelFn, half, delay) {
+  const ka = Math.floor((S.t - half + delay) / S.Ts) - 1;
+  const kb = Math.ceil( (S.t + half + delay) / S.Ts) + 1;
+  cx.beginPath();
+  let prevX = vX(p, levelFn(ka));
+  cx.moveTo(prevX, tY(p, -half));
+  for (let k = ka; k <= kb; k++) {
+    const y = tY(p, k * S.Ts - S.t - delay);
+    const x = vX(p, levelFn(k));
+    cx.lineTo(prevX, y);   // vertical: hold previous value until this sample's time
+    cx.lineTo(x, y);       // horizontal: step to the new value
+    prevX = x;
+  }
+  cx.lineTo(prevX, tY(p, half));
+  cx.stroke();
 }
 
 // ─── Digital panel ────────────────────────────────────────────────────────────
@@ -769,44 +794,47 @@ function drawDigital() {
   cx.save(); clip(RP);
   panelGrid(RP);
 
-  const half = S.win / 2;
-  const k0 = Math.floor((S.t - half) / S.Ts) - 1;
-  const k1 = Math.ceil( (S.t + half) / S.Ts) + 1;
+  const half  = S.win / 2;
+  const K     = Math.max(1, S.taps);
+  const delay = groupDelay();
 
-  // Raw SD dots (only in sigma-delta modes)
-  if (S.mode !== 'nyquist') {
-    for (let k = k0; k <= k1; k++) {
-      cx.fillStyle = 'rgba(182,227,182,0.4)';
-      cx.beginPath();
-      cx.arc(vX(RP, rawOut(k)), tY(RP, k*S.Ts - S.t), Math.max(1, 2.5*pxf), 0, 2*Math.PI);
-      cx.fill();
-    }
+  // Reference: src/cicadc/manim_scene.py  _dynamic_right()
+  if (K > 1) {
+    // Coarse modulator/quantizer output (pale green), at the true sample times.
+    cx.strokeStyle = 'rgba(182,227,182,0.75)'; cx.lineWidth = Math.max(1, 1.6 * pxf);
+    holdStaircase(RP, rawOut, half, 0);
+    // Filtered digital output (white), the sliding sinc^M evaluated at every
+    // sample and delay-compensated so it lines up in time with the analog signal.
+    cx.strokeStyle = '#cdd6e6'; cx.lineWidth = Math.max(1.3, 2.6 * pxf);
+    holdStaircase(RP, filtOut, half, delay);
+  } else {
+    // No filter: the quantizer/modulator output IS the digital output.
+    cx.strokeStyle = '#cdd6e6'; cx.lineWidth = Math.max(1.3, 2.6 * pxf);
+    holdStaircase(RP, rawOut, half, 0);
   }
 
-  // Staircase: for SD modes draw at the decimated rate (one step per K samples)
-  // so the post-filter output is visually distinct from the oversampled raw output.
-  // For Nyquist (no filter) each sample is one step as usual.
-  const K = S.taps > 1 ? S.taps : 1;
-  cx.strokeStyle = '#cdd6e6'; cx.lineWidth = Math.max(1, 2 * pxf);
-  cx.beginPath();
-  let started = false;
-  const kd0 = Math.floor(k0 / K);
-  const kd1 = Math.ceil(k1  / K);
-  for (let kd = kd0; kd <= kd1; kd++) {
-    const k  = kd * K;
-    const x  = vX(RP, filtOut(k));
-    const yS = tY(RP, k       * S.Ts - S.t);
-    const yE = tY(RP, (k + K) * S.Ts - S.t);
-    if (!started) { cx.moveTo(x, yS); started = true; }
-    else          cx.lineTo(x, yS);  // horizontal: step to new decimated value
-    cx.lineTo(x, yE);                // vertical:   hold for K·Ts
+  // Sample dots on the raw (coarse) staircase
+  const ka = Math.floor((S.t - half) / S.Ts), kb = Math.ceil((S.t + half) / S.Ts);
+  cx.fillStyle = '#ffd400';
+  for (let k = ka; k <= kb; k++) {
+    cx.beginPath();
+    cx.arc(vX(RP, rawOut(k)), tY(RP, k*S.Ts - S.t), Math.max(1, 2.2*pxf), 0, 2*Math.PI);
+    cx.fill();
   }
-  cx.stroke();
 
-  // Gray car at "now": sit on the current decimated staircase level
-  const kNow    = Math.floor(S.t / S.Ts);
-  const kDecNow = Math.floor(kNow / K) * K;
-  drawCar(vX(RP, filtOut(kDecNow)), tY(RP, 0), 0, 'gray', 1.0);
+  // Cars
+  const kNow = Math.floor(S.t / S.Ts);
+  if (K > 1) {
+    // Coarse-output ghost car at "now"
+    drawCar(vX(RP, rawOut(kNow)), tY(RP, 0), 0, 'green', 0.60);
+    // Filtered digital car, delay-compensated into the past (same anchor as LP)
+    const dVis = Math.min(delay, 0.82 * half);
+    const kVis = Math.floor((S.t + delay - dVis) / S.Ts);
+    drawCar(vX(RP, filtOut(kVis)), tY(RP, -dVis), 0, 'gray', 1.0);
+  } else {
+    // No filter: a single digital car at "now"
+    drawCar(vX(RP, rawOut(kNow)), tY(RP, 0), 0, 'gray', 1.0);
+  }
 
   cx.restore();
 }
@@ -823,12 +851,14 @@ function drawNoise() {
   cx.fillText(noiseTitle, pcx(p), p.y0 - Math.round(5*pxf));
   cx.save(); clip(p);
 
-  const kNow  = Math.floor(S.t / S.Ts);
   const tSpan = S.win;
-  const k0    = Math.ceil((S.t - tSpan) / S.Ts);
   const yCen  = pcy(p);
   const lsb   = 2 * S.vref / (1 << S.bits);
-  const yScl  = ph(p) * 0.42;  // maps ±1 FS to ±42 % of strip height
+  const band  = ph(p) * 0.42;  // half-height of the strip = ±1 LSB
+
+  // The strip is normalised to the quantizer LSB, so its band is always ±1 LSB
+  // whatever the bit depth.  Reference: manim_scene.py _ns_y / _noise_full.
+  const nsY = err => yCen - Math.max(-1, Math.min(1, err / lsb)) * band;
 
   // Zero line
   cx.strokeStyle = '#3b5090'; cx.lineWidth = Math.max(0.5, pxf);
@@ -837,33 +867,35 @@ function drawNoise() {
   // ±½ LSB and ±1 LSB reference dashes
   cx.strokeStyle = '#1d2742'; cx.lineWidth = Math.max(0.3, 0.5*pxf); cx.setLineDash([4*pxf,4*pxf]);
   for (const f of [0.5, 1, -0.5, -1]) {
-    const y = yCen - f * lsb * yScl;
+    const y = yCen - f * band;
     cx.beginPath(); cx.moveTo(p.x0, y); cx.lineTo(p.x1, y); cx.stroke();
   }
   cx.setLineDash([]);
 
-  // Map sample index k to x position (now = right edge)
-  const xOf = k => p.x0 + (k * S.Ts - (S.t - tSpan)) / tSpan * pw(p);
+  // Map a relative time (≤0, now = right edge) to x
+  const nsX = tRel => p.x1 + Math.max(-tSpan, Math.min(0, tRel)) / tSpan * pw(p);
 
-  // Error staircase: filtered output vs time-aligned analog input.
-  // Steps at the decimated rate (K) to match the digital staircase.
-  // sigAt(k·Ts − D) aligns the analog reference to the filter's output time.
-  const D  = groupDelay();
-  const K  = S.taps > 1 ? S.taps : 1;
-  const kd0 = Math.ceil(k0 / K);
-  const kd1 = Math.floor(kNow / K);
+  // Error staircase, stepping at every sample: clean analog (delay-aligned) minus
+  // the digital output (filtered when a decimator is active, else the raw level).
+  // Reference: src/cicadc/manim_scene.py  _noise_items() / _digital_out_sample().
+  const K     = Math.max(1, S.taps);
+  const delay = K > 1 ? groupDelay() : 0;
+  const errAt = k => cleanSig(k * S.Ts - delay) - (K > 1 ? filtOut(k) : rawOut(k));
+  const ka = Math.ceil( (S.t - tSpan + delay) / S.Ts);
+  const kb = Math.floor((S.t + delay) / S.Ts);
+
   cx.strokeStyle = '#ff4444'; cx.lineWidth = Math.max(0.8, 1.5*pxf);
   cx.beginPath();
-  let started = false;
-  for (let kd = kd0; kd <= kd1; kd++) {
-    const k   = kd * K;
-    const err = sigAt(k * S.Ts - D) - filtOut(k);
-    const xS  = xOf(k), xE = xOf(k + K);
-    const y   = yCen - err * yScl;
-    if (!started) { cx.moveTo(Math.max(p.x0, xS), y); started = true; }
-    else          cx.lineTo(Math.max(p.x0, xS), y);
-    cx.lineTo(Math.min(p.x1, xE), y);
+  let prev = errAt(ka);
+  cx.moveTo(nsX(-tSpan), nsY(prev));
+  for (let k = ka; k <= kb; k++) {
+    const x = nsX((k * S.Ts - S.t) - delay);
+    const e = errAt(k);
+    cx.lineTo(x, nsY(prev));  // horizontal: hold previous error to this time
+    cx.lineTo(x, nsY(e));     // vertical:   step to the new error
+    prev = e;
   }
+  cx.lineTo(nsX(0), nsY(prev));
   cx.stroke();
 
   // "Now" marker (right edge)
@@ -872,8 +904,8 @@ function drawNoise() {
   cx.setLineDash([]);
 
   cx.fillStyle = '#506070'; cx.font = `${Math.max(6, Math.round(9*pxf))}px monospace`; cx.textAlign = 'left';
-  cx.fillText('+1 LSB', p.x0 + Math.round(3*pxf), yCen - lsb*yScl - Math.round(2*pxf));
-  cx.fillText('−1 LSB', p.x0 + Math.round(3*pxf), yCen + lsb*yScl + Math.round(9*pxf));
+  cx.fillText('+1 LSB', p.x0 + Math.round(3*pxf), yCen - band - Math.round(2*pxf));
+  cx.fillText('−1 LSB', p.x0 + Math.round(3*pxf), yCen + band + Math.round(9*pxf));
   cx.restore();
 }
 
