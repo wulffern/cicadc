@@ -450,48 +450,47 @@ let carReady = false;
 (function loadCar() {
   const img = new Image();
   img.onload = () => {
-    // 1. Draw onto temp canvas and apply green-chroma removal (g>110 && g−r>40 && g−b>40)
-    const tmp = document.createElement('canvas');
-    tmp.width = img.naturalWidth; tmp.height = img.naturalHeight;
-    const tc = tmp.getContext('2d');
-    tc.drawImage(img, 0, 0);
-    const raw = tc.getImageData(0, 0, tmp.width, tmp.height);
-    const px = raw.data;
-    for (let i = 0; i < px.length; i += 4) {
-      const r = px[i], g = px[i+1], b = px[i+2];
-      if (g > 110 && g - r > 40 && g - b > 40) px[i+3] = 0;
-    }
-    tc.putImageData(raw, 0, 0);
+    try {
+      // Scale down immediately so getImageData works on a tiny buffer (CAR_SIZE²×4 bytes).
+      const tmp = document.createElement('canvas');
+      tmp.width = tmp.height = CAR_SIZE;
+      const tc = tmp.getContext('2d', { willReadFrequently: true });
+      tc.drawImage(img, 0, 0, CAR_SIZE, CAR_SIZE);
 
-    // 2. Build tinted variants: greyscale the car then apply RGB tint
-    const variants = {
-      blue:  [0.38, 0.55, 0.91],
-      green: [0.71, 0.89, 0.71],
-      gray:  [0.80, 0.84, 0.90],
-    };
-    for (const [name, [tr, tg, tb]] of Object.entries(variants)) {
-      // Tint a copy of the keyed image data
-      const id = tc.getImageData(0, 0, tmp.width, tmp.height);
-      const d  = id.data;
-      for (let i = 0; i < d.length; i += 4) {
-        if (d[i+3] > 0) {
-          const lum = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
-          d[i]   = lum * tr | 0;
-          d[i+1] = lum * tg | 0;
-          d[i+2] = lum * tb | 0;
-        }
+      // Green-chroma removal: g>110 && g−r>40 && g−b>40
+      const raw = tc.getImageData(0, 0, CAR_SIZE, CAR_SIZE);
+      const px  = raw.data;
+      for (let i = 0; i < px.length; i += 4) {
+        const r = px[i], g = px[i+1], b = px[i+2];
+        if (g > 110 && g - r > 40 && g - b > 40) px[i+3] = 0;
       }
-      tc.putImageData(id, 0, 0);
+      // px is now the chroma-keyed source; keep it as the master copy.
 
-      // Scale down to CAR_SIZE × CAR_SIZE
-      const out = document.createElement('canvas');
-      out.width = out.height = CAR_SIZE;
-      out.getContext('2d').drawImage(tmp, 0, 0, CAR_SIZE, CAR_SIZE);
-      carSprites[name] = out;
-    }
-    carReady = true;
+      // Build tinted variants: each uses a fresh copy of the keyed pixels.
+      const variants = {
+        blue:  [0.38, 0.55, 0.91],
+        green: [0.71, 0.89, 0.71],
+        gray:  [0.80, 0.84, 0.90],
+      };
+      for (const [name, [tr, tg, tb]] of Object.entries(variants)) {
+        const copy = new Uint8ClampedArray(px);   // fresh copy each time
+        for (let i = 0; i < copy.length; i += 4) {
+          if (copy[i+3] > 0) {
+            const lum = 0.299*copy[i] + 0.587*copy[i+1] + 0.114*copy[i+2];
+            copy[i]   = lum * tr | 0;
+            copy[i+1] = lum * tg | 0;
+            copy[i+2] = lum * tb | 0;
+          }
+        }
+        const out = document.createElement('canvas');
+        out.width = out.height = CAR_SIZE;
+        out.getContext('2d').putImageData(new ImageData(copy, CAR_SIZE, CAR_SIZE), 0, 0);
+        carSprites[name] = out;
+      }
+      carReady = true;
+    } catch (e) { console.warn('Car load failed:', e.message); }
   };
-  img.onerror = () => { carReady = false; };  // fall back to triangle
+  img.onerror = () => console.warn('car.png not found');
   img.src = 'car.png';
 })();
 
@@ -509,8 +508,9 @@ function drawCar(x, y, angle, variant, alpha) {
     // Triangle: vertex at top → points up at angle=0
     const col = {blue:'#3361e6', green:'#b6e3b6', gray:'#cdd6e6'}[variant] || '#cdd6e6';
     cx.fillStyle = col;
+    const h = CAR_SIZE * 0.5, w = CAR_SIZE * 0.38;
     cx.beginPath();
-    cx.moveTo(0, -9); cx.lineTo(-7, 7); cx.lineTo(7, 7); cx.closePath();
+    cx.moveTo(0, -h); cx.lineTo(-w, h * 0.6); cx.lineTo(w, h * 0.6); cx.closePath();
     cx.fill();
   }
   cx.restore();
