@@ -468,9 +468,9 @@ let carReady = false;
 
       // Build tinted variants: each uses a fresh copy of the keyed pixels.
       const variants = {
-        blue:  [0.38, 0.55, 0.91],
-        green: [0.71, 0.89, 0.71],
-        gray:  [0.80, 0.84, 0.90],
+        blue:  [0.45, 0.65, 2.00],   // boost: lum*2 on B channel → vibrant blue
+        green: [0.35, 2.00, 0.35],   // boost: lum*2 on G channel → vibrant green
+        gray:  [1.30, 1.40, 1.60],   // boost: all channels → bright cool gray
       };
       for (const [name, [tr, tg, tb]] of Object.entries(variants)) {
         const copy = new Uint8ClampedArray(px);   // fresh copy each time
@@ -601,8 +601,8 @@ function drawAnalog() {
   const yNow = tY(LP, 0);
   const ang  = curveAngle(0);
 
-  // Ghost car (pale-green, 45% opacity): raw ADC level at "now"
-  drawCar(vX(LP, rawOut(kNow)), yNow, ang, 'green', 0.45);
+  // Ghost car (pale-green, 60% opacity): raw ADC level at "now"
+  drawCar(vX(LP, rawOut(kNow)), yNow, ang, 'green', 0.60);
   // Blue car: clean analog value at "now"
   drawCar(vX(LP, cleanSig(S.t)), yNow, ang, 'blue', 1.0);
 
@@ -631,25 +631,30 @@ function drawDigital() {
     }
   }
 
-  // Staircase: sample k holds filtOut(k) for t ∈ [k·Ts, (k+1)·Ts).
-  // In the rotated panel (time on Y): horizontal = value transition at sample
-  // boundary; vertical = hold for duration of interval.
+  // Staircase: for SD modes draw at the decimated rate (one step per K samples)
+  // so the post-filter output is visually distinct from the oversampled raw output.
+  // For Nyquist (no filter) each sample is one step as usual.
+  const K = (S.mode !== 'nyquist' && S.taps > 1) ? S.taps : 1;
   cx.strokeStyle = '#cdd6e6'; cx.lineWidth = 2;
   cx.beginPath();
   let started = false;
-  for (let k = k0; k <= k1; k++) {
+  const kd0 = Math.floor(k0 / K);
+  const kd1 = Math.ceil(k1  / K);
+  for (let kd = kd0; kd <= kd1; kd++) {
+    const k  = kd * K;
     const x  = vX(RP, filtOut(k));
-    const yS = tY(RP, k     * S.Ts - S.t);
-    const yE = tY(RP, (k+1) * S.Ts - S.t);
+    const yS = tY(RP, k       * S.Ts - S.t);
+    const yE = tY(RP, (k + K) * S.Ts - S.t);
     if (!started) { cx.moveTo(x, yS); started = true; }
-    else          cx.lineTo(x, yS);  // horizontal: step to new value
-    cx.lineTo(x, yE);                // vertical:   hold
+    else          cx.lineTo(x, yS);  // horizontal: step to new decimated value
+    cx.lineTo(x, yE);                // vertical:   hold for K·Ts
   }
   cx.stroke();
 
-  // Gray car at "now" (no tangent tilt – staircase has no smooth tangent)
-  const kNow = Math.floor(S.t / S.Ts);
-  drawCar(vX(RP, filtOut(kNow)), tY(RP, 0), 0, 'gray', 1.0);
+  // Gray car at "now": sit on the current decimated staircase level
+  const kNow    = Math.floor(S.t / S.Ts);
+  const kDecNow = Math.floor(kNow / K) * K;
+  drawCar(vX(RP, filtOut(kDecNow)), tY(RP, 0), 0, 'gray', 1.0);
 
   cx.restore();
 }
@@ -659,7 +664,7 @@ function drawNoise() {
   const p = NP;
   panelBg(p);
   cx.fillStyle = '#6090b0'; cx.font = 'bold 10px monospace'; cx.textAlign = 'center';
-  cx.fillText('QUANTISATION NOISE  (time → right,  error amplitude ↕)', pcx(p), p.y0-5);
+  cx.fillText('QUANTISATION ERROR — ADC output vs analog input  (pre-filter)', pcx(p), p.y0-5);
   cx.save(); clip(p);
 
   const kNow  = Math.floor(S.t / S.Ts);
@@ -689,7 +694,7 @@ function drawNoise() {
   cx.beginPath();
   let started = false;
   for (let k = k0; k <= kNow; k++) {
-    const err = smpVal(k) - filtOut(k);
+    const err = smpVal(k) - rawOut(k);  // pre-filter error: ADC output vs analog input
     const xS  = xOf(k), xE = xOf(k + 1);
     const y   = yCen - err * yScl;
     if (!started) { cx.moveTo(Math.max(p.x0, xS), y); started = true; }
