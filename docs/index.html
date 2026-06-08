@@ -11,6 +11,11 @@
   gtag('js', new Date());
   gtag('config', 'G-JR1G6C914F');
 </script>
+<script>
+  MathJax = { tex: { inlineMath: [['\\(','\\)']], displayMath: [['\\[','\\]']] },
+              svg: { fontCache: 'global' } };
+</script>
+<script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
 <style>
 :root {
   --bg:     #0b0f1a;
@@ -1214,6 +1219,84 @@ document.getElementById('sl-noise').addEventListener('input', function() {
     The decimation filter is a sinc<sup>M</sup> cascade (M = modulator order + 1), matched to the
     noise shaping to maximise stop-band rejection. A higher oversampling ratio K also helps: each
     doubling of K reduces in-band noise by an extra 3 dB beyond the shaping benefit.
+  </p>
+
+  <h2>STATE-SPACE FORMULATION</h2>
+  <p>
+    Each converter in this tool can be written compactly as a linear state-space system.
+    We follow the notation of the <em>control-bounded converter</em> framework —
+    Malmberg, Feyling &amp; de la Rosa, <em>“A Control-Bounded Quadrature Leapfrog ADC”</em>
+    (<a href="https://arxiv.org/abs/2310.18110">arXiv:2310.18110</a>, 2023) — where an analog
+    ADC is described by a state vector \(\mathbf{x}\) driven by the input \(u\) and the
+    digital control (feedback) signal.
+  </p>
+  <p>
+    In continuous time the control-bounded analog system has the form
+  </p>
+  \[
+    \dot{\mathbf{x}}(t) = \mathbf{A}\,\mathbf{x}(t) + \mathbf{B}\,u(t) + \boldsymbol{\Gamma}\,\mathbf{s}(t),
+    \qquad \mathbf{s}(t) = Q\!\left(\tilde{\boldsymbol{\Gamma}}^{\!\top}\mathbf{x}(t)\right),
+  \]
+  <p>
+    with system matrix \(\mathbf{A}\), input matrix \(\mathbf{B}\), digital-control (feedback)
+    matrix \(\boldsymbol{\Gamma}\), and quantizer \(Q\). The discrete-time modulators
+    implemented here are the sampled-data equivalent, updated once per sample index \(n\):
+  </p>
+  \[
+    \mathbf{x}[n] = \mathbf{A}\,\mathbf{x}[n-1] + \mathbf{B}\,u[n] + \boldsymbol{\Gamma}\,y[n-1],
+    \qquad y[n] = Q\!\left(\mathbf{c}^{\!\top}\mathbf{x}[n]\right),
+  \]
+  <p>
+    where \(y[n-1]\) is the fed-back quantized output and \(Q\) is a mid-rise quantizer with
+    \(2^{\text{bits}}\) levels spread over \([-v_\text{ref}, v_\text{ref}]\)
+    (a 1-bit quantizer returns only \(\pm v_\text{ref}\)).
+  </p>
+
+  <h3>Nyquist ADC</h3>
+  <p>
+    There is no analog state — the converter is memoryless, so \(\mathbf{A}\), \(\mathbf{B}\)
+    and \(\boldsymbol{\Gamma}\) vanish and each sample is quantized independently:
+  </p>
+  \[ y[n] = Q\big(u[n]\big). \]
+
+  <h3>1st-order ΣΔ</h3>
+  <p>
+    A single integrator accumulates the error between the input and the fed-back output.
+    The state \(x\) is scalar, with
+    \(\mathbf{A}=[\,1\,]\), \(\mathbf{B}=[\,1\,]\),
+    \(\boldsymbol{\Gamma}=[-1]\), \(\mathbf{c}=[\,1\,]\):
+  </p>
+  \[
+    x[n] = x[n-1] + u[n] - y[n-1],
+    \qquad y[n] = Q\big(x[n]\big).
+  \]
+  <p>
+    The single delaying integrator gives a first-order noise transfer function
+    \(\mathrm{NTF}(z) = (1 - z^{-1})\).
+  </p>
+
+  <h3>2nd-order ΣΔ (CIFB)</h3>
+  <p>
+    The standard cascade-of-integrators feedback (CIFB) structure with two integrators and
+    feedback coefficients \(a_1 = 1,\ a_2 = 2\) (and \(b_1 = 1,\ g_1 = 1\)). With the state
+    \(\mathbf{x} = [\,x_1,\ x_2\,]^{\top}\), substituting the first integrator into the second
+    gives the closed-form update:
+  </p>
+  \[
+    \begin{bmatrix} x_1[n] \\ x_2[n] \end{bmatrix}
+    = \begin{bmatrix} 1 & 0 \\ 1 & 1 \end{bmatrix}
+      \begin{bmatrix} x_1[n-1] \\ x_2[n-1] \end{bmatrix}
+    + \begin{bmatrix} 1 \\ 1 \end{bmatrix} u[n]
+    + \begin{bmatrix} -1 \\ -3 \end{bmatrix} y[n-1],
+    \qquad
+    y[n] = Q\!\left(\mathbf{c}^{\!\top}\mathbf{x}[n]\right),\ \ \mathbf{c}^{\!\top} = [\,0\ \ 1\,].
+  \]
+  <p>
+    The unit sub-diagonal of \(\mathbf{A}\) is the chain feed-forward (\(x_1\) into \(x_2\));
+    the feedback column \(\boldsymbol{\Gamma} = [-1,\ -3]^{\top}\) collects \(-a_1\) at the first
+    integrator and \(-(a_1 + a_2)\) at the second. This realises the second-order noise transfer
+    function \(\mathrm{NTF}(z) = (1 - z^{-1})^2\), which pushes far more quantization noise out of
+    band than the first-order loop.
   </p>
 
   <h2>HOW THE CODE WORKS</h2>
