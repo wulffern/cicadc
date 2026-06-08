@@ -182,6 +182,7 @@ class MainWindow(QWidget):
         self.adc_combo.addItem("1st-order \u03a3\u0394", "sigma_delta")
         self.adc_combo.addItem("2nd-order \u03a3\u0394", "sigma_delta2")
         self.adc_combo.addItem("3rd-order leapfrog", "leapfrog")
+        self.adc_combo.addItem("Leapfrog (control-bounded)", "leapfrog_cb")
         self.adc_combo.currentIndexChanged.connect(self._on_adc_type)
         form.addRow("ADC type", self.adc_combo)
 
@@ -290,7 +291,8 @@ class MainWindow(QWidget):
             self.view.render_once()
 
     def _update_chain(self) -> None:
-        sd_order = {"sigma_delta": 1, "sigma_delta2": 2, "leapfrog": 3}.get(self.scene.adc_mode, 0)
+        sd_order = {"sigma_delta": 1, "sigma_delta2": 2, "leapfrog": 3,
+                    "leapfrog_cb": 3}.get(self.scene.adc_mode, 0)
         self.chain.update_state(
             noise_on=self.signal.noise_amp > 0.0,
             filter_on=self.scene.filter_taps > 1,
@@ -340,6 +342,13 @@ class MainWindow(QWidget):
         mode = self.adc_combo.itemData(index)
         self.scene.set_adc_mode(mode)
         self.dither_check.setEnabled(mode in ("sigma_delta", "sigma_delta2", "leapfrog"))
+        # The control-bounded leapfrog only reconstructs at high oversampling, so
+        # drop the signal frequency to put it around OSR ~20 when it is selected.
+        if mode == "leapfrog_cb":
+            target = 0.5 / (20.0 * self.signal.sample_period)   # OSR ~ 20
+            tick = max(self.freq_slider.minimum(),
+                       min(self.freq_slider.maximum(), int(round(target / 0.05))))
+            self.freq_slider.setValue(tick)   # triggers _on_freq -> resets caches
         self._update_chain()
         self._refresh_if_paused()
 

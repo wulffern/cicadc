@@ -19,9 +19,13 @@ from typing import Dict, Optional
 
 import numpy as np
 
+from .control_bounded import DiscreteLeapfrogCBADC, cb_reconstruct
 from .quantizer import Quantizer
 from .sigma_delta import SigmaDelta1, SigmaDelta2, Leapfrog, _SigmaDeltaBase
 from .signal_source import SignalSource
+
+#: ADC mode of the discrete-time control-bounded leapfrog.
+CONTROL_BOUNDED_MODE = "leapfrog_cb"
 
 
 class SignalChain:
@@ -62,6 +66,19 @@ class SignalChain:
         self._fir: np.ndarray | None = None
         self._fir_key: tuple | None = None
 
+        # Discrete-time control-bounded leapfrog: a separate converter with N
+        # local 1-bit controls and a non-causal FIR estimator. Its estimator is
+        # tuned to the live oversampling ratio; the control bitstream is cached
+        # by a forward recursion (cleared whenever the signal/quantizer change).
+        self._cb = DiscreteLeapfrogCBADC(N=3)
+        self._cb_K = 256                       # estimator half-length
+        self._cb_warmup = 256
+        self._cb_taps: np.ndarray | None = None
+        self._cb_taps_osr: float | None = None
+        self._cb_state: Dict[int, np.ndarray] = {}   # k -> integrator state x[k]
+        self._cb_cmin: int | None = None
+        self._cb_cmax: int | None = None
+
     # ------------------------------------------------------------- ADC mode
     def is_sigma_delta(self) -> bool:
         return self.adc_mode in self._modulators
@@ -78,10 +95,15 @@ class SignalChain:
         self.sd_dither = amount
         self.reset()
 
+    def is_control_bounded(self) -> bool:
+        return self.adc_mode == CONTROL_BOUNDED_MODE
+
     def reset(self) -> None:
         """Invalidate every modulator cache (input/quantizer parameters changed)."""
         for sd in self._modulators.values():
             sd.reset()
+        self._cb_state.clear()
+        self._cb_cmin = self._cb_cmax = None
 
     def sync(self) -> None:
         """Mirror the live quantizer settings into the active modulator, resetting
@@ -101,13 +123,89 @@ class SignalChain:
             self.sync()
             self.modulator().prepare(k_lo, k_hi)
 
+    # ---------------------------------------------- control-bounded leapfrog
+    def osr(self) -> float:
+        """Oversampling ratio of the live signal: ``f_s / (2 * f_signal)``."""
+        return 0.5 / max(self.signal.frequency * self.signal.sample_period, 1e-9)
+
+    def _cb_taps_for_osr(self) -> np.ndarray:
+        """Estimator FIR taps, recomputed when the oversampling ratio changes.
+
+        The estimator bandwidth is set to half the live oversampling ratio so the
+        signal sits comfortably inside the reconstruction band (unity in-band
+        gain) rather than at its edge (which would roll off ~6 dB).
+        """
+        osr = round(self.osr(), 2)
+        if self._cb_taps is None or self._cb_taps_osr != osr:
+            self._cb.osr = max(osr / 2.0, 2.0)
+            self._cb_taps = self._cb.estimator_taps(K1=self._cb_K, K2=self._cb_K)
+            self._cb_taps_osr = osr
+        return self._cb_taps
+
+    def _cb_fill(self, ka: int, kb: int) -> None:
+        """Ensure the control-bounded state ``x[k]`` is cached for ``k in [ka, kb]``.
+
+        Extends the cache forward when contiguous, else cold-starts a warm-up
+        ``_cb_warmup`` samples before ``ka``.
+        """
+        st = self._cb_state
+        Ad = self._cb.Ad
+        Bd = self._cb.Bd.flatten()
+        G = self._cb.Gamma
+        N = self._cb.N
+        u = self.signal.sample_value
+
+        def step(x, n):
+            return Ad @ x + Bd * u(n) + G @ np.where(x >= 0.0, 1.0, -1.0)
+
+        if self._cb_cmax is None or ka > self._cb_cmax + 1 or ka < (self._cb_cmin or 0):
+            st.clear()
+            c = ka - self._cb_warmup
+            x = np.zeros(N)
+            st[c] = x
+            for n in range(c, kb):
+                x = step(x, n)
+                st[n + 1] = x
+            self._cb_cmin, self._cb_cmax = c, kb
+        elif kb > self._cb_cmax:
+            x = st[self._cb_cmax]
+            for n in range(self._cb_cmax, kb):
+                x = step(x, n)
+                st[n + 1] = x
+            self._cb_cmax = kb
+        # keep the cache from growing without bound over a long session
+        if self._cb_cmax - self._cb_cmin > 40000:
+            self._cb_cmin = self._cb_cmax = None
+
+    def _cb_estimate(self, k: int) -> float:
+        """Reconstructed (estimated) input ``u_hat[k]`` from the control bits."""
+        K = self._cb_K
+        taps = self._cb_taps_for_osr()
+        self._cb_fill(k - K, k + K)
+        bits = np.array([np.where(self._cb_state[j] >= 0.0, 1.0, -1.0)
+                         for j in range(k - K, k + K)])
+        return float(np.einsum("lm,lm->", bits, taps))
+
+    def _cb_fft_estimate(self, k0: int, N: int) -> np.ndarray:
+        """The estimate sequence ``u_hat[k0-N+1 .. k0]`` (vectorised)."""
+        K = self._cb_K
+        taps = self._cb_taps_for_osr()
+        self._cb_fill(k0 - N + 1 - K, k0 + K)
+        ks = np.arange(k0 - N + 1 - K, k0 + K)
+        bits = np.array([np.where(self._cb_state[j] >= 0.0, 1.0, -1.0) for j in ks])
+        rec = cb_reconstruct(bits, taps, K, K)          # nan in the K-edges
+        return rec[K:K + N]
+
     # ------------------------------------------------------------- levels
     def raw_level(self, k: int) -> float:
         """Reconstructed (unfiltered) digital level for sample index ``k``.
 
         For a sigma-delta / leapfrog ADC this is the coarse modulator output;
-        otherwise it is the memoryless uniform quantizer level.
+        otherwise it is the memoryless uniform quantizer level. For the
+        control-bounded leapfrog the "output" is the reconstructed estimate.
         """
+        if self.is_control_bounded():
+            return self._cb_estimate(k)
         sd = self.modulator()
         if sd is not None:
             return sd.output(k)
@@ -116,6 +214,8 @@ class SignalChain:
 
     def filt_level(self, k: int) -> float:
         """Decimated digital level at sample ``k`` (normalised sinc^M cascade)."""
+        if self.is_control_bounded():
+            return self._cb_estimate(k)
         K = max(1, int(self.filter_taps))
         if K <= 1:
             return self.raw_level(k)
@@ -137,6 +237,8 @@ class SignalChain:
         A filtered output is delay-compensated so its held value lines up in
         time with the analog signal it represents.
         """
+        if self.is_control_bounded():        # estimator is centred (zero delay)
+            return self._cb_estimate(self.signal.sample_index_at(t_rel))
         if int(self.filter_taps) > 1:
             k = self.signal.sample_index_at(t_rel + self.group_delay())
             return self.filt_level(k)
@@ -220,6 +322,8 @@ class SignalChain:
         decimator active the modulator's STF phase adds a further (frequency
         dependent) delay ``-arg(STF)/w``.
         """
+        if self.is_control_bounded():
+            return 0.0                        # the estimator is centred (non-causal)
         K = max(1, int(self.filter_taps))
         M = self.filter_order()
         delay = M * (K - 1) / 2.0 * self.signal.sample_period
@@ -236,6 +340,8 @@ class SignalChain:
         transfer unity. It is the sinc^M decimator magnitude times the
         modulator's signal-transfer magnitude ``|STF|``.
         """
+        if self.is_control_bounded():
+            return 1.0                        # the estimator already gives unity gain
         K = max(1, int(self.filter_taps))
         if K == 1:
             return 1.0
@@ -261,6 +367,18 @@ class SignalChain:
         convolution rather than re-running the FIR per sample.
         """
         N = int(self.fft_size if n is None else n)
+        if self.is_control_bounded():
+            d = self._cb_fft_estimate(k0, N)
+        else:
+            d = self._fft_digital(k0, N)
+        win = np.hanning(N)
+        spec = np.fft.rfft(d * win)
+        coherent_gain = win.sum() / 2.0  # so a full-scale sine peaks at 0 dB
+        mag = np.abs(spec) / max(coherent_gain, 1e-9)
+        return 20.0 * np.log10(mag + 1e-9)
+
+    def _fft_digital(self, k0: int, N: int) -> np.ndarray:
+        """Digital-output sequence (raw or sinc-decimated) over ``N`` samples."""
         K = max(1, int(self.filter_taps))
         if K > 1:
             h = self.decimation_taps()
@@ -273,9 +391,4 @@ class SignalChain:
         else:
             self.prepare(k0 - N + 1 - 2, k0 + 2)
             d = np.array([self.raw_level(k) for k in range(k0 - N + 1, k0 + 1)], dtype=float)
-
-        win = np.hanning(N)
-        spec = np.fft.rfft(d * win)
-        coherent_gain = win.sum() / 2.0  # so a full-scale sine peaks at 0 dB
-        mag = np.abs(spec) / max(coherent_gain, 1e-9)
-        return 20.0 * np.log10(mag + 1e-9)
+        return d

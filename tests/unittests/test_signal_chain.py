@@ -6,7 +6,7 @@ import unittest
 
 import numpy as np
 
-from cicadc.signal_chain import SignalChain
+from cicadc.signal_chain import SignalChain, CONTROL_BOUNDED_MODE
 from cicadc.signal_source import SignalSource
 from cicadc.quantizer import Quantizer
 
@@ -90,6 +90,31 @@ class TestSignalChain(unittest.TestCase):
         db = c.fft_db(sig.sample_index_now())
         self.assertEqual(db.shape[0], 512 // 2 + 1)
         self.assertLess(db.max(), 6.0)                # full-scale sine near 0 dBFS
+
+    def test_control_bounded_mode(self):
+        # High-OSR signal so the control-bounded leapfrog reconstructs well.
+        sig = SignalSource(frequency=0.1, amplitude=0.4, sample_period=0.25)
+        sig.t_now = 300.0
+        c = SignalChain(signal=sig, quantizer=Quantizer(bits=1))
+        c.set_adc_mode(CONTROL_BOUNDED_MODE)
+        self.assertTrue(c.is_control_bounded())
+        self.assertEqual(c.group_delay(), 0.0)       # estimator is centred
+        self.assertEqual(c.filter_gain(), 1.0)
+        k0 = sig.sample_index_now()
+        est = np.array([c.filt_level(k) for k in range(k0 - 250, k0 - 40)])
+        clean = np.array([sig.sample_value_clean(k) for k in range(k0 - 250, k0 - 40)])
+        # The estimate reconstructs the analog input (a few percent amplitude,
+        # small RMS error) — far better than chance for a 1-bit converter.
+        self.assertLess(abs(np.nanmax(np.abs(est)) - np.nanmax(np.abs(clean))), 0.08)
+        self.assertLess(np.sqrt(np.mean((est - clean) ** 2)), 0.06)
+
+    def test_control_bounded_reset_clears_cache(self):
+        c = self._chain()
+        c.set_adc_mode(CONTROL_BOUNDED_MODE)
+        c.filt_level(c.signal.sample_index_now())
+        self.assertTrue(c._cb_state)
+        c.reset()
+        self.assertFalse(c._cb_state)
 
     def test_reset_clears_modulator_caches(self):
         c = self._chain()
