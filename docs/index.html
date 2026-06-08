@@ -1136,17 +1136,18 @@ document.getElementById('sl-noise').addEventListener('input', function() {
   <p>
     An <strong>Analog-to-Digital Converter (ADC)</strong> is the bridge between the continuous
     physical world and the discrete digital world. A microphone, a temperature sensor, a radio
-    receiver — all produce voltages that vary smoothly over time. A processor can only work with
-    numbers. The ADC samples that voltage at regular intervals and assigns each sample a binary
-    code, turning sound, light, and temperature into bits.
+    receiver — all produce analog values that vary smoothly over time. A processor or digital logic can only work with
+    numbers. The ADC samples that analog signal at regular intervals and assigns each sample a binary
+    code, turning sound, light of all frequencies, and temperature into bits.
   </p>
   <p>
     Two properties define what an ADC can represent:
   </p>
   <ul>
     <li><strong>Sample rate</strong> — how many samples per second (Hz). By the
-        <em>Nyquist–Shannon sampling theorem</em>, a signal must be sampled at least twice its
-        highest frequency to be reconstructed without aliasing.</li>
+        <em>Nyquist–Shannon sampling theorem</em>, a signal must be sampled at least twice the average bandwidth to be re-constructed. (E. Candes, M. Wakin ,  " An Introduction To Compressive Sampling", 2008
+        <a href='https://doi.org/10.1109/MSP.2007.914731'>https://doi.org/10.1109/MSP.2007.914731</a>)
+        </li>
     <li><strong>Resolution (bits)</strong> — how many distinct levels the output can take.
         An <em>N</em>-bit ADC has 2<sup>N</sup> levels; each extra bit halves the quantization
         step and reduces quantization noise by ~6 dB.</li>
@@ -1167,8 +1168,7 @@ document.getElementById('sl-noise').addEventListener('input', function() {
 
   <h3>Nyquist-rate ADC</h3>
   <p>
-    A <strong>Nyquist ADC</strong> samples the input at exactly the rate required by the
-    bandwidth of interest — one sample per Nyquist interval. Every sample uses all
+    A <strong>Nyquist ADC</strong> samples the input at one sample per interval. Every sample uses all
     <em>N</em> bits of resolution. This is what a classic successive-approximation (SAR) or
     pipeline ADC does. Achieving high resolution requires precise analog components (matched
     capacitors, accurate references), which become harder to build as process nodes shrink.
@@ -1187,11 +1187,13 @@ document.getElementById('sl-noise').addEventListener('input', function() {
     pushed out of the signal band, into high frequencies where a digital <em>decimation filter</em>
     can remove it. The result can achieve very high effective resolution using only simple,
     well-matched digital circuits.
+
+    See <a href='https://analogicus.com/aic2026/oversampling_and_sigma-delta_adcs'>Oversampling and Sigma-Delta ADCs</a> for more information.
   </p>
   <p>
     The tradeoff: ΣΔ ADCs trade <em>speed</em> for <em>resolution</em>. They are ideal for
     audio (24-bit at 192 kHz), sensor readout, and instrumentation — but not for wideband RF
-    receivers that need simultaneous high speed and high resolution.
+    receivers (base-stations) that need simultaneous high speed and high resolution.
   </p>
   <div class="note">
     In the visualiser: select <em>ΣΔ 1st</em> or <em>ΣΔ 2nd</em>, then increase
