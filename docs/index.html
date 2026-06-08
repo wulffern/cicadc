@@ -17,7 +17,6 @@
   --text:   #e6f0ff;
   --bar:    #3b82f6;
   --barnow: #39ff14;
-  --zero:   #3b5090;
   --muted:  #6080a0;
   --ctrl:   #0f1526;
 }
@@ -29,8 +28,6 @@ body {
   padding: 10px 10px 20px; gap: 8px;
 }
 h1 { color: var(--curve); font-size: 16px; letter-spacing: 4px; padding: 4px 0; }
-
-/* Chain bar */
 #chain { display: flex; align-items: center; gap: 4px; width: 100%; max-width: 1200px; }
 .cb {
   flex: 1; text-align: center; padding: 3px 0; font-size: 10px; letter-spacing: 1px;
@@ -39,14 +36,10 @@ h1 { color: var(--curve); font-size: 16px; letter-spacing: 4px; padding: 4px 0; 
 }
 .cb.on { border-color: var(--curve); color: var(--curve); background: #0d1830; }
 .ca { color: var(--edge); font-size: 10px; }
-
 canvas {
   display: block; width: 100%; max-width: 1200px;
   background: var(--bg); border: 1px solid var(--edge);
-  image-rendering: crisp-edges;
 }
-
-/* Controls */
 #ctrl {
   width: 100%; max-width: 1200px;
   background: var(--ctrl); border: 1px solid var(--edge);
@@ -78,15 +71,13 @@ canvas {
 #playbtn.paused { background: #0f2010; border-color: var(--barnow); color: var(--barnow); }
 .ditrow { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
 .ditrow input { accent-color: var(--curve); cursor: pointer; }
-
-/* Legend */
 #legend {
   width: 100%; max-width: 1200px;
   display: flex; gap: 16px; flex-wrap: wrap;
   color: var(--muted); font-size: 10px; padding: 4px 2px;
 }
 .leg { display: flex; align-items: center; gap: 5px; }
-.lswatch { width: 20px; height: 3px; border-radius: 2px; }
+.lsw { width: 20px; height: 3px; border-radius: 2px; }
 .ldot { width: 8px; height: 8px; border-radius: 50%; }
 </style>
 </head>
@@ -95,27 +86,22 @@ canvas {
 <h1>cicadc</h1>
 
 <div id="chain">
-  <div class="cb on">ANALOG</div>
-  <span class="ca">→</span>
-  <div class="cb" id="cb-noise">NOISE</div>
-  <span class="ca">→</span>
-  <div class="cb on" id="cb-adc">NYQUIST ADC</div>
-  <span class="ca">→</span>
-  <div class="cb" id="cb-filter">FILTER ×1</div>
-  <span class="ca">→</span>
+  <div class="cb on">ANALOG</div><span class="ca">→</span>
+  <div class="cb" id="cb-noise">NOISE</div><span class="ca">→</span>
+  <div class="cb on" id="cb-adc">NYQUIST ADC</div><span class="ca">→</span>
+  <div class="cb" id="cb-filter">FILTER ×1</div><span class="ca">→</span>
   <div class="cb on">DIGITAL</div>
 </div>
 
 <canvas id="c" width="1200" height="780"></canvas>
 
 <div id="ctrl">
-  <!-- Col 1: ADC mode -->
   <div class="cg">
     <div class="cgt">ADC MODE</div>
     <div class="moderow">
-      <button class="modebtn on" id="btn-nyq"  onclick="setMode('nyquist')">Nyquist</button>
-      <button class="modebtn"    id="btn-sd1"  onclick="setMode('sigma_delta')">ΣΔ 1st</button>
-      <button class="modebtn"    id="btn-sd2"  onclick="setMode('sigma_delta2')">ΣΔ 2nd</button>
+      <button class="modebtn on" id="btn-nyq" onclick="setMode('nyquist')">Nyquist</button>
+      <button class="modebtn"   id="btn-sd1" onclick="setMode('sigma_delta')">ΣΔ 1st</button>
+      <button class="modebtn"   id="btn-sd2" onclick="setMode('sigma_delta2')">ΣΔ 2nd</button>
     </div>
     <div class="ditrow">
       <input type="checkbox" id="dithcb" onchange="setDither(this.checked)">
@@ -124,7 +110,6 @@ canvas {
     <button id="playbtn" onclick="togglePause()">⏸ Pause</button>
   </div>
 
-  <!-- Col 2: Signal -->
   <div class="cg">
     <div class="cgt">SIGNAL</div>
     <div class="cr">
@@ -153,7 +138,6 @@ canvas {
     </div>
   </div>
 
-  <!-- Col 3: ADC -->
   <div class="cg">
     <div class="cgt">QUANTISER</div>
     <div class="cr">
@@ -170,7 +154,6 @@ canvas {
     </div>
   </div>
 
-  <!-- Col 4: Filter -->
   <div class="cg">
     <div class="cgt">FILTER (ΣΔ)</div>
     <div class="cr">
@@ -179,94 +162,96 @@ canvas {
              oninput="setTaps(+this.value)">
       <span class="v" id="v-taps">4</span>
     </div>
-    <div style="color:var(--muted);font-size:10px;line-height:1.6;margin-top:2px;">
-      Sinc<sup>M</sup> decimator<br>
-      M = SD order + 1<br>
+    <div style="color:var(--muted);font-size:10px;line-height:1.7;margin-top:2px;">
+      Sinc<sup>M</sup> decimator (M = order+1)<br>
       <span id="filter-info">Nyquist: no filter</span>
     </div>
   </div>
 </div>
 
 <div id="legend">
-  <div class="leg"><div class="lswatch" style="background:var(--curve)"></div>Analog signal</div>
-  <div class="leg"><div class="ldot" style="background:var(--sample)"></div>Sample instants</div>
-  <div class="leg"><div class="ldot" style="background:var(--quant)"></div>Raw ADC output</div>
-  <div class="leg"><div class="lswatch" style="background:var(--digi)"></div>Filtered digital output</div>
-  <div class="leg"><div class="lswatch" style="background:var(--error)"></div>Quantisation error</div>
-  <div class="leg"><div class="lswatch" style="background:var(--barnow)"></div>FFT input frequency</div>
+  <div class="leg"><div class="lsw" style="background:#3361e6"></div>Analog signal</div>
+  <div class="leg"><div class="ldot" style="background:#ffd400"></div>Sample instants</div>
+  <div class="leg"><div class="ldot" style="background:#b6e3b6"></div>Raw ADC output</div>
+  <div class="leg"><div class="lsw" style="background:#cdd6e6"></div>Filtered digital</div>
+  <div class="leg"><div class="lsw" style="background:#ff4444"></div>Quant. error</div>
+  <div class="leg"><div class="lsw" style="background:#39ff14"></div>FFT signal bin</div>
 </div>
 
 <script>
 'use strict';
 
-// ─── Canvas setup ─────────────────────────────────────────────────────────────
+// ─── Canvas ───────────────────────────────────────────────────────────────────
 const cv = document.getElementById('c');
 const cx = cv.getContext('2d');
 const CW = 1200, CH = 780;
 
-// ─── Layout ───────────────────────────────────────────────────────────────────
-const LP  = {x0: 10,  y0: 35,  x1: 590,  y1: 530};  // left  – analog
-const RP  = {x0: 610, y0: 35,  x1: 1190, y1: 530};  // right – digital
-const NP  = {x0: 10,  y0: 548, x1: 590,  y1: 770};  // noise strip
-const FP  = {x0: 610, y0: 548, x1: 1190, y1: 770};  // FFT strip
+// ─── Layout (canvas pixels) ───────────────────────────────────────────────────
+const LP = {x0: 10,  y0: 35,  x1: 590,  y1: 530};   // left  – analog
+const RP = {x0: 610, y0: 35,  x1: 1190, y1: 530};   // right – digital
+const NP = {x0: 10,  y0: 548, x1: 590,  y1: 770};   // noise strip
+const FP = {x0: 610, y0: 548, x1: 1190, y1: 770};   // FFT strip
 
-function pcx(p){return(p.x0+p.x1)/2}
-function pcy(p){return(p.y0+p.y1)/2}
-function pw(p) {return p.x1-p.x0}
-function ph(p) {return p.y1-p.y0}
+const pcx = p => (p.x0 + p.x1) / 2;
+const pcy = p => (p.y0 + p.y1) / 2;
+const pw  = p => p.x1 - p.x0;
+const ph  = p => p.y1 - p.y0;
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const S = {
-  t:      0,           // simulation time (seconds)
+  t:      0,
   speed:  1.0,
-  freq:   1.0,         // signal frequency (Hz)
-  amp:    0.8,         // amplitude (fraction of full scale)
-  bits:   3,           // ADC resolution
-  Ts:     0.25,        // sample period (seconds)
-  noise:  0.0,         // additive noise amplitude
-  taps:   4,           // CIC filter taps K
-  mode:   'nyquist',   // 'nyquist' | 'sigma_delta' | 'sigma_delta2'
+  freq:   1.0,
+  amp:    0.8,
+  bits:   3,
+  Ts:     0.25,
+  noise:  0.0,
+  taps:   4,
+  mode:   'nyquist',
   dither: false,
   paused: false,
   vref:   1.0,
-  win:    4.0,         // visible time window (±win/2 around "now")
+  win:    4.0,   // total visible window = ±win/2 around "now"
 };
 
-// ─── Signal model ─────────────────────────────────────────────────────────────
+// ─── Signal ───────────────────────────────────────────────────────────────────
 function cleanSig(t) {
   return S.amp * Math.sin(2 * Math.PI * S.freq * t);
 }
-
+// d(cleanSig)/dt
+function cleanSigDeriv(t) {
+  return S.amp * 2 * Math.PI * S.freq * Math.cos(2 * Math.PI * S.freq * t);
+}
 function noiseHash(n) {
   const x = Math.sin(n * 12.9898) * 43758.5453;
   return 2 * (x - Math.floor(x)) - 1;
 }
-
 function noiseAt(t) {
   if (!S.noise) return 0;
-  const i  = t / 0.06;
-  const i0 = Math.floor(i);
-  const f  = i - i0;
+  const i = t / 0.06, i0 = Math.floor(i), f = i - i0;
   const fs = f * f * (3 - 2 * f);  // smoothstep
   return S.noise * (noiseHash(i0) * (1 - fs) + noiseHash(i0 + 1) * fs);
 }
-
-function sigAt(t)   { return cleanSig(t) + noiseAt(t); }
-function smpVal(k)  { return sigAt(k * S.Ts); }
+function sigAt(t)  { return cleanSig(t) + noiseAt(t); }
+function smpVal(k) { return sigAt(k * S.Ts); }
 
 // ─── Nyquist mid-tread quantiser ──────────────────────────────────────────────
+// Levels at centres of 2**bits equal-width bins in [-vref, +vref].
 function nyQ(v) {
-  const L = 1 << S.bits, step = 2 * S.vref / L;
+  const L = 1 << S.bits;
+  const step = 2 * S.vref / L;
   const idx = Math.max(0, Math.min(L - 1, Math.floor((v + S.vref) / step)));
   return -S.vref + (idx + 0.5) * step;
 }
 
-// ─── Sigma-delta internal quantiser (mid-rise, matches Python) ────────────────
+// ─── Sigma-delta internal quantiser (mid-rise) ────────────────────────────────
+// Matches Python's _SigmaDeltaBase._quantize:
+//   levels <= 2  → ±vref  (1-bit comparator)
+//   otherwise    → 2**bits levels spaced 2*vref/(L-1) apart
 function ditherV(k) {
   const x = Math.sin(k * 78.233 + 1.0) * 43758.5453;
   return 2 * (x - Math.floor(x)) - 1;
 }
-
 function sdQ(v, k) {
   const L = 1 << S.bits;
   const u = v + (S.dither ? 0.5 * ditherV(k) : 0);
@@ -276,22 +261,18 @@ function sdQ(v, k) {
   return -S.vref + idx * step;
 }
 
-// ─── Sigma-delta modulators with per-index caching ───────────────────────────
+// ─── Sigma-delta caches ───────────────────────────────────────────────────────
 let c1 = new Map(), c2 = new Map(), cKey = '';
 
-function cacheKey() {
+function sdCacheKey() {
   return `${S.bits}|${S.dither}|${S.freq}|${S.amp}|${S.Ts}|${S.noise}`;
 }
-
 function checkCache() {
-  const k = cacheKey();
-  if (k !== cKey) {
-    c1.clear(); c2.clear(); cKey = k;
-    resetFFTBuf();
-  }
+  const k = sdCacheKey();
+  if (k !== cKey) { c1.clear(); c2.clear(); cKey = k; resetFFTBuf(); }
 }
 
-// 1st-order: x[n] = x[n-1] + (u[n] - y[n-1]),  y[n] = Q(x[n])
+// 1st-order: x[n] = x[n-1] + (u[n] − y[n-1]),  y[n] = Q(x[n])
 function sd1(k) {
   checkCache();
   const hit = c1.get(k);
@@ -303,7 +284,7 @@ function sd1(k) {
     c1.set(k, [x, y]);
     return y;
   }
-  // cold start: warm up 128 steps before k
+  // Cold start: run 128 warm-up steps before k
   let s = [0, 0];
   for (let n = k - 128; n <= k; n++) {
     const x = s[0] + (smpVal(n) - s[1]);
@@ -314,9 +295,9 @@ function sd1(k) {
   return s[1];
 }
 
-// 2nd-order CIFB (a1=1, a2=2, b1=1, g1=1):
-//   x1[n] = x1[n-1] + (u[n] - y[n-1])
-//   x2[n] = x2[n-1] + (x1[n] - 2*y[n-1])
+// 2nd-order CIFB (a1=1, a2=2, b1=1, g1=1 → NTF = (1−z⁻¹)²):
+//   x1[n] = x1[n-1] + (u[n] − y[n-1])
+//   x2[n] = x2[n-1] + (x1[n] − 2·y[n-1])
 //   y[n]  = Q(x2[n])
 function sd2(k) {
   checkCache();
@@ -325,8 +306,8 @@ function sd2(k) {
   const prev = c2.get(k - 1);
   if (prev) {
     const u  = smpVal(k);
-    const x1 = prev[0] + (u   - prev[2]);
-    const x2 = prev[1] + (x1  - 2 * prev[2]);
+    const x1 = prev[0] + (u  - prev[2]);
+    const x2 = prev[1] + (x1 - 2 * prev[2]);
     const y  = sdQ(x2, k);
     c2.set(k, [x1, x2, y]);
     return y;
@@ -349,23 +330,22 @@ function rawOut(k) {
   return nyQ(smpVal(k));
 }
 
-// ─── CIC / sinc^M FIR filter ──────────────────────────────────────────────────
-// h = convolve([1,…,1]_K, M times).  sum(h) = K^M → divide to normalise.
+// ─── Sinc^M decimation filter ─────────────────────────────────────────────────
+// Composite FIR h = [1]*K convolved M times.  sum(h) = K^M (the DC gain).
+// Matches Python's _decimation_taps() and _filt_level().
 let firH = null, firKey = '';
 
 function getFIR() {
   const K = Math.max(1, S.taps);
-  const M = S.mode === 'nyquist' ? 1
-          : S.mode === 'sigma_delta' ? 2 : 3;
+  const M = S.mode === 'nyquist' ? 1 : S.mode === 'sigma_delta' ? 2 : 3;
   const key = `${K}|${M}`;
   if (key === firKey && firH) return firH;
   let h = [1];
-  const box = new Array(K).fill(1);
   for (let m = 0; m < M; m++) {
     const res = new Array(h.length + K - 1).fill(0);
     for (let i = 0; i < h.length; i++)
       for (let j = 0; j < K; j++)
-        res[i + j] += h[i];
+        res[i + j] += h[i];  // h[i] * box[j] where box[j]=1
     h = res;
   }
   firH = h; firKey = key;
@@ -375,13 +355,13 @@ function getFIR() {
 function filtOut(k) {
   if (S.taps <= 1 || S.mode === 'nyquist') return rawOut(k);
   const h    = getFIR();
-  const hSum = h.reduce((a, b) => a + b, 0);
+  const hSum = h.reduce((a, b) => a + b, 0);  // = K^M
   let acc = 0;
   for (let j = 0; j < h.length; j++) acc += h[j] * rawOut(k - j);
   return acc / hSum;
 }
 
-// ─── FFT (Cooley-Tukey radix-2) ───────────────────────────────────────────────
+// ─── FFT (Cooley-Tukey radix-2, in-place) ────────────────────────────────────
 const FFT_N = 512;
 const fftBuf = new Float32Array(FFT_N);
 let fftHead = 0, fftLastK = -1, fftMag = null;
@@ -399,10 +379,10 @@ function updateFFT(kNow) {
   }
   fftLastK = kNow;
 
-  // Build windowed input
+  // Hann-windowed input from oldest (index fftHead % FFT_N) to newest
   const re = new Array(FFT_N), im = new Array(FFT_N).fill(0);
   for (let n = 0; n < FFT_N; n++) {
-    const w = 0.5 - 0.5 * Math.cos(2 * Math.PI * n / (FFT_N - 1)); // Hann
+    const w = 0.5 - 0.5 * Math.cos(2 * Math.PI * n / (FFT_N - 1));
     re[n] = fftBuf[(fftHead + n) % FFT_N] * w;
   }
 
@@ -417,7 +397,6 @@ function updateFFT(kNow) {
       [im[i], im[j]] = [im[j], im[i]];
     }
   }
-
   // Butterfly stages
   for (let len = 2; len <= FFT_N; len <<= 1) {
     const ang = -2 * Math.PI / len;
@@ -425,107 +404,168 @@ function updateFFT(kNow) {
     for (let i = 0; i < FFT_N; i += len) {
       let cr = 1, ci = 0;
       for (let k = 0; k < (len >> 1); k++) {
-        const ur = re[i + k], ui = im[i + k];
-        const vr = re[i + k + (len >> 1)] * cr - im[i + k + (len >> 1)] * ci;
-        const vi = re[i + k + (len >> 1)] * ci + im[i + k + (len >> 1)] * cr;
-        re[i + k]            = ur + vr; im[i + k]            = ui + vi;
-        re[i + k + (len>>1)] = ur - vr; im[i + k + (len>>1)] = ui - vi;
-        const ncr = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = ncr;
+        const ur = re[i+k], ui = im[i+k];
+        const vr = re[i+k+(len>>1)]*cr - im[i+k+(len>>1)]*ci;
+        const vi = re[i+k+(len>>1)]*ci + im[i+k+(len>>1)]*cr;
+        re[i+k]         = ur+vr; im[i+k]         = ui+vi;
+        re[i+k+(len>>1)] = ur-vr; im[i+k+(len>>1)] = ui-vi;
+        const ncr = cr*wr - ci*wi; ci = cr*wi + ci*wr; cr = ncr;
       }
     }
   }
 
+  // Magnitude in dBFS.
+  // Hann coherent gain = 0.5, so a full-scale sinusoid (A=1) produces
+  // FFT bin magnitude = A * FFT_N/2 * 0.5 = FFT_N/4.
+  // Dividing by FFT_N/4 normalises 0 dBFS to a full-scale sine.
+  const norm = FFT_N / 4;
   const half = FFT_N >> 1;
   fftMag = new Float32Array(half);
   for (let i = 0; i < half; i++) {
-    const m = Math.sqrt(re[i] * re[i] + im[i] * im[i]) / half;
+    const m = Math.sqrt(re[i]*re[i] + im[i]*im[i]) / norm;
     fftMag[i] = Math.max(-80, 20 * Math.log10(m + 1e-12));
   }
 }
 
 // ─── Coordinate helpers ───────────────────────────────────────────────────────
-// tRel = 0 → centre ("now");  tRel > 0 → up (future);  tRel < 0 → down (past)
-function tY(p, tRel) {
-  return pcy(p) - tRel * ph(p) / S.win;
-}
-// value ±vref maps to ±(40% of panel half-width) from centre
-function vX(p, v) {
-  return pcx(p) + v * pw(p) * 0.4 / S.vref;
+// tRel=0 → panel centre ("now"); tRel>0 → up (future); tRel<0 → down (past).
+function tY(p, tRel) { return pcy(p) - tRel * ph(p) / S.win; }
+// value ±vref maps to ±40% of the panel half-width from centre.
+function vX(p, v)    { return pcx(p) + v * pw(p) * 0.4 / S.vref; }
+
+// Tangent angle (canvas radians) of the clean-signal curve on LP at t_rel.
+// Car image is rear-view, nose points toward top of image = upward on canvas.
+// The formula gives −π/2 for a flat signal (straight up), tilting as needed.
+function curveAngle(tRel) {
+  const dydt = -ph(LP) / S.win;                              // canvas dy per second
+  const dxdt = (pw(LP) * 0.4 / S.vref) * cleanSigDeriv(S.t + tRel);
+  return Math.atan2(dydt, dxdt) + Math.PI / 2;
 }
 
-// ─── Drawing helpers ──────────────────────────────────────────────────────────
+// ─── Car image loading ────────────────────────────────────────────────────────
+const CAR_SIZE = 48;
+const carSprites = {};   // keyed by variant: 'blue' | 'green' | 'gray'
+let carReady = false;
+
+(function loadCar() {
+  const img = new Image();
+  img.onload = () => {
+    // 1. Draw onto temp canvas and apply green-chroma removal (g>110 && g−r>40 && g−b>40)
+    const tmp = document.createElement('canvas');
+    tmp.width = img.naturalWidth; tmp.height = img.naturalHeight;
+    const tc = tmp.getContext('2d');
+    tc.drawImage(img, 0, 0);
+    const raw = tc.getImageData(0, 0, tmp.width, tmp.height);
+    const px = raw.data;
+    for (let i = 0; i < px.length; i += 4) {
+      const r = px[i], g = px[i+1], b = px[i+2];
+      if (g > 110 && g - r > 40 && g - b > 40) px[i+3] = 0;
+    }
+    tc.putImageData(raw, 0, 0);
+
+    // 2. Build tinted variants: greyscale the car then apply RGB tint
+    const variants = {
+      blue:  [0.38, 0.55, 0.91],
+      green: [0.71, 0.89, 0.71],
+      gray:  [0.80, 0.84, 0.90],
+    };
+    for (const [name, [tr, tg, tb]] of Object.entries(variants)) {
+      // Tint a copy of the keyed image data
+      const id = tc.getImageData(0, 0, tmp.width, tmp.height);
+      const d  = id.data;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i+3] > 0) {
+          const lum = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+          d[i]   = lum * tr | 0;
+          d[i+1] = lum * tg | 0;
+          d[i+2] = lum * tb | 0;
+        }
+      }
+      tc.putImageData(id, 0, 0);
+
+      // Scale down to CAR_SIZE × CAR_SIZE
+      const out = document.createElement('canvas');
+      out.width = out.height = CAR_SIZE;
+      out.getContext('2d').drawImage(tmp, 0, 0, CAR_SIZE, CAR_SIZE);
+      carSprites[name] = out;
+    }
+    carReady = true;
+  };
+  img.onerror = () => { carReady = false; };  // fall back to triangle
+  img.src = 'car.png';
+})();
+
+// Draw the car sprite (or triangle fallback) centred at (x,y), rotated by angle.
+// angle=0 → default image orientation (nose pointing up = toward future).
+function drawCar(x, y, angle, variant, alpha) {
+  cx.save();
+  cx.globalAlpha = alpha == null ? 1 : alpha;
+  cx.translate(x, y);
+  cx.rotate(angle);
+  if (carReady && carSprites[variant]) {
+    const s = CAR_SIZE / 2;
+    cx.drawImage(carSprites[variant], -s, -s, CAR_SIZE, CAR_SIZE);
+  } else {
+    // Triangle: vertex at top → points up at angle=0
+    const col = {blue:'#3361e6', green:'#b6e3b6', gray:'#cdd6e6'}[variant] || '#cdd6e6';
+    cx.fillStyle = col;
+    cx.beginPath();
+    cx.moveTo(0, -9); cx.lineTo(-7, 7); cx.lineTo(7, 7); cx.closePath();
+    cx.fill();
+  }
+  cx.restore();
+}
+
+// ─── Panel drawing helpers ────────────────────────────────────────────────────
 function clip(p) {
-  cx.beginPath();
-  cx.rect(p.x0, p.y0, pw(p), ph(p));
-  cx.clip();
+  cx.beginPath(); cx.rect(p.x0, p.y0, pw(p), ph(p)); cx.clip();
 }
 
 function panelBg(p) {
   cx.fillStyle = '#0b0f1a';
   cx.fillRect(p.x0, p.y0, pw(p), ph(p));
-  cx.strokeStyle = '#2b3a63';
-  cx.lineWidth = 1;
-  cx.strokeRect(p.x0 + 0.5, p.y0 + 0.5, pw(p) - 1, ph(p) - 1);
+  cx.strokeStyle = '#2b3a63'; cx.lineWidth = 1;
+  cx.strokeRect(p.x0+.5, p.y0+.5, pw(p)-1, ph(p)-1);
 }
 
 function panelGrid(p) {
+  // Quantisation threshold lines (L+1 vertical lines at bin boundaries)
   const L = 1 << S.bits, step = 2 * S.vref / L;
   cx.strokeStyle = '#1d2742'; cx.lineWidth = 0.5;
   for (let i = 0; i <= L; i++) {
     const x = vX(p, -S.vref + i * step);
     cx.beginPath(); cx.moveTo(x, p.y0); cx.lineTo(x, p.y1); cx.stroke();
   }
-  // Zero-voltage axis
+  // Zero-amplitude axis
   cx.strokeStyle = '#3b5090'; cx.lineWidth = 1;
-  cx.beginPath(); cx.moveTo(vX(p, 0), p.y0); cx.lineTo(vX(p, 0), p.y1); cx.stroke();
-  // Time grid (every second)
+  cx.beginPath(); cx.moveTo(vX(p,0), p.y0); cx.lineTo(vX(p,0), p.y1); cx.stroke();
+  // Horizontal time-grid lines (every second)
   cx.strokeStyle = '#1d2742'; cx.lineWidth = 0.5;
-  const half = S.win / 2;
-  for (let t = -Math.ceil(half); t <= Math.ceil(half); t++) {
+  for (let t = -Math.ceil(S.win/2); t <= Math.ceil(S.win/2); t++) {
     const y = tY(p, t);
     cx.beginPath(); cx.moveTo(p.x0, y); cx.lineTo(p.x1, y); cx.stroke();
   }
-  // "Now" line
-  const yn = tY(p, 0);
-  cx.strokeStyle = '#ffd400'; cx.lineWidth = 1;
-  cx.setLineDash([5, 5]);
-  cx.beginPath(); cx.moveTo(p.x0 + 2, yn); cx.lineTo(p.x1 - 2, yn); cx.stroke();
+  // "Now" dashed line
+  cx.strokeStyle = '#ffd400'; cx.lineWidth = 1; cx.setLineDash([5,5]);
+  cx.beginPath(); cx.moveTo(p.x0+2, tY(p,0)); cx.lineTo(p.x1-2, tY(p,0)); cx.stroke();
   cx.setLineDash([]);
 }
 
 function panelLabels(p, title, titleColor) {
-  // Title above panel
-  cx.fillStyle = titleColor; cx.font = 'bold 11px monospace';
-  cx.textAlign = 'center';
+  cx.fillStyle = titleColor; cx.font = 'bold 11px monospace'; cx.textAlign = 'center';
   cx.fillText(title, pcx(p), p.y0 - 8);
-  // Direction labels inside panel
   cx.fillStyle = '#506070'; cx.font = '9px monospace';
   cx.textAlign = 'left';
-  cx.fillText('↑ future', p.x0 + 5, p.y0 + 14);
-  cx.textAlign = 'left';
-  cx.fillText('↓ past',   p.x0 + 5, p.y1 - 5);
-  cx.fillText('now',      p.x0 + 5, tY(p, 0) - 4);
-  // Amplitude axis labels (below panel)
+  cx.fillText('↑ future', p.x0+5, p.y0+14);
+  cx.fillText('↓ past',   p.x0+5, p.y1-5);
+  cx.fillText('now',      p.x0+5, tY(p,0)-4);
   cx.fillStyle = '#506070'; cx.textAlign = 'center';
-  cx.fillText('+FS', vX(p,  S.vref), p.y1 + 11);
-  cx.fillText('0',   vX(p,  0),      p.y1 + 11);
-  cx.fillText('−FS', vX(p, -S.vref), p.y1 + 11);
+  cx.fillText('+FS', vX(p, S.vref),  p.y1+11);
+  cx.fillText('0',   vX(p, 0),       p.y1+11);
+  cx.fillText('−FS', vX(p, -S.vref), p.y1+11);
 }
 
-function carMarker(x, y, color, r) {
-  r = r || 7;
-  // Outer ring
-  cx.fillStyle = 'rgba(0,0,0,0.6)';
-  cx.beginPath(); cx.arc(x, y, r + 2, 0, 2 * Math.PI); cx.fill();
-  // Filled circle
-  cx.fillStyle = color;
-  cx.beginPath(); cx.arc(x, y, r, 0, 2 * Math.PI); cx.fill();
-  // Inner highlight
-  cx.fillStyle = 'rgba(255,255,255,0.45)';
-  cx.beginPath(); cx.arc(x - r * 0.25, y - r * 0.25, r * 0.35, 0, 2 * Math.PI); cx.fill();
-}
-
-// ─── Render: analog panel ─────────────────────────────────────────────────────
+// ─── Analog panel ─────────────────────────────────────────────────────────────
 function drawAnalog() {
   panelBg(LP);
   panelLabels(LP, 'ANALOG SIGNAL', '#3361e6');
@@ -537,117 +577,114 @@ function drawAnalog() {
   // Smooth analog curve
   cx.strokeStyle = '#3361e6'; cx.lineWidth = 2.5;
   cx.beginPath();
-  const N = 400;
-  for (let i = 0; i <= N; i++) {
+  for (let i = 0, N = 400; i <= N; i++) {
     const tr = -half + i * S.win / N;
-    const x = vX(LP, cleanSig(S.t + tr));
-    const y = tY(LP, tr);
-    i === 0 ? cx.moveTo(x, y) : cx.lineTo(x, y);
+    i === 0
+      ? cx.moveTo(vX(LP, cleanSig(S.t+tr)), tY(LP, tr))
+      : cx.lineTo(vX(LP, cleanSig(S.t+tr)), tY(LP, tr));
   }
   cx.stroke();
 
-  // Sample instants: yellow dot on curve + pale-green quant shadow
-  const k0 = Math.ceil((S.t - half)  / S.Ts);
+  // Sample dots and raw-ADC shadows
+  const k0 = Math.ceil( (S.t - half) / S.Ts);
   const k1 = Math.floor((S.t + half) / S.Ts);
   for (let k = k0; k <= k1; k++) {
     const tr = k * S.Ts - S.t;
     const y  = tY(LP, tr);
-    // Yellow dot at clean-signal position
     cx.fillStyle = '#ffd400';
-    cx.beginPath(); cx.arc(vX(LP, cleanSig(k * S.Ts)), y, 3.5, 0, 2*Math.PI); cx.fill();
-    // Pale-green raw ADC level
-    cx.fillStyle = 'rgba(182,227,182,0.6)';
+    cx.beginPath(); cx.arc(vX(LP, cleanSig(k*S.Ts)), y, 3.5, 0, 2*Math.PI); cx.fill();
+    cx.fillStyle = 'rgba(182,227,182,0.55)';
     cx.beginPath(); cx.arc(vX(LP, rawOut(k)), y, 3, 0, 2*Math.PI); cx.fill();
   }
 
-  // Blue car at "now" on the analog curve
-  carMarker(vX(LP, cleanSig(S.t)), tY(LP, 0), '#3361e6');
+  const kNow = Math.floor(S.t / S.Ts);
+  const yNow = tY(LP, 0);
+  const ang  = curveAngle(0);
+
+  // Ghost car (pale-green, 45% opacity): raw ADC level at "now"
+  drawCar(vX(LP, rawOut(kNow)), yNow, ang, 'green', 0.45);
+  // Blue car: clean analog value at "now"
+  drawCar(vX(LP, cleanSig(S.t)), yNow, ang, 'blue', 1.0);
+
   cx.restore();
 }
 
-// ─── Render: digital panel ────────────────────────────────────────────────────
+// ─── Digital panel ────────────────────────────────────────────────────────────
 function drawDigital() {
-  const modeLabel = {
-    nyquist:      'NYQUIST',
-    sigma_delta:  'ΣΔ 1ST ORDER',
-    sigma_delta2: 'ΣΔ 2ND ORDER',
-  }[S.mode];
+  const label = {nyquist:'NYQUIST', sigma_delta:'ΣΔ 1ST ORDER', sigma_delta2:'ΣΔ 2ND ORDER'}[S.mode];
   panelBg(RP);
-  panelLabels(RP, `DIGITAL OUTPUT — ${modeLabel}`, '#cdd6e6');
+  panelLabels(RP, `DIGITAL OUTPUT — ${label}`, '#cdd6e6');
   cx.save(); clip(RP);
   panelGrid(RP);
 
   const half = S.win / 2;
   const k0 = Math.floor((S.t - half) / S.Ts) - 1;
-  const k1 = Math.ceil((S.t + half)  / S.Ts) + 1;
+  const k1 = Math.ceil( (S.t + half) / S.Ts) + 1;
 
-  // Raw SD output: pale-green dots (only in SD modes)
+  // Raw SD dots (only in sigma-delta modes)
   if (S.mode !== 'nyquist') {
     for (let k = k0; k <= k1; k++) {
       cx.fillStyle = 'rgba(182,227,182,0.4)';
       cx.beginPath();
-      cx.arc(vX(RP, rawOut(k)), tY(RP, k * S.Ts - S.t), 2.5, 0, 2*Math.PI);
+      cx.arc(vX(RP, rawOut(k)), tY(RP, k*S.Ts - S.t), 2.5, 0, 2*Math.PI);
       cx.fill();
     }
   }
 
-  // Filtered digital staircase
-  // Each sample k holds value filtOut(k) for time [k*Ts, (k+1)*Ts).
-  // In the rotated panel: horizontal = transition (new x at y of sample boundary);
-  //                       vertical   = hold (same x over the interval).
+  // Staircase: sample k holds filtOut(k) for t ∈ [k·Ts, (k+1)·Ts).
+  // In the rotated panel (time on Y): horizontal = value transition at sample
+  // boundary; vertical = hold for duration of interval.
   cx.strokeStyle = '#cdd6e6'; cx.lineWidth = 2;
   cx.beginPath();
   let started = false;
   for (let k = k0; k <= k1; k++) {
     const x  = vX(RP, filtOut(k));
-    const yS = tY(RP, k       * S.Ts - S.t);  // y at start of interval (= end of prev)
-    const yE = tY(RP, (k + 1) * S.Ts - S.t);  // y at end   of interval
+    const yS = tY(RP, k     * S.Ts - S.t);
+    const yE = tY(RP, (k+1) * S.Ts - S.t);
     if (!started) { cx.moveTo(x, yS); started = true; }
-    else          cx.lineTo(x, yS);   // horizontal: step to new value at sample boundary
-    cx.lineTo(x, yE);                 // vertical:   hold until next sample
+    else          cx.lineTo(x, yS);  // horizontal: step to new value
+    cx.lineTo(x, yE);                // vertical:   hold
   }
   cx.stroke();
 
-  // White/gray car at "now"
+  // Gray car at "now" (no tangent tilt – staircase has no smooth tangent)
   const kNow = Math.floor(S.t / S.Ts);
-  carMarker(vX(RP, filtOut(kNow)), tY(RP, 0), '#cdd6e6');
+  drawCar(vX(RP, filtOut(kNow)), tY(RP, 0), 0, 'gray', 1.0);
+
   cx.restore();
 }
 
-// ─── Render: quantisation noise strip ────────────────────────────────────────
+// ─── Quantisation noise strip ─────────────────────────────────────────────────
 function drawNoise() {
   const p = NP;
   panelBg(p);
   cx.fillStyle = '#6090b0'; cx.font = 'bold 10px monospace'; cx.textAlign = 'center';
-  cx.fillText('QUANTISATION NOISE  (x-axis: time, y-axis: error in LSB)', pcx(p), p.y0 - 5);
+  cx.fillText('QUANTISATION NOISE  (time → right,  error amplitude ↕)', pcx(p), p.y0-5);
   cx.save(); clip(p);
 
-  const kNow = Math.floor(S.t / S.Ts);
+  const kNow  = Math.floor(S.t / S.Ts);
   const tSpan = S.win;
-  const k0 = Math.ceil((S.t - tSpan) / S.Ts);
+  const k0    = Math.ceil((S.t - tSpan) / S.Ts);
+  const yCen  = pcy(p);
+  const lsb   = 2 * S.vref / (1 << S.bits);
+  const yScl  = ph(p) * 0.42;  // maps ±1 FS to ±42 % of strip height
 
-  const yCen = pcy(p);
-  const lsb  = 2 * S.vref / (1 << S.bits);
-  const yScl = ph(p) * 0.42;  // ±1 FS → ±42% of strip height
-
-  // Grid: zero line
+  // Zero line
   cx.strokeStyle = '#3b5090'; cx.lineWidth = 1;
   cx.beginPath(); cx.moveTo(p.x0, yCen); cx.lineTo(p.x1, yCen); cx.stroke();
 
-  // ±½ LSB and ±1 LSB reference lines
-  cx.strokeStyle = '#1d2742'; cx.lineWidth = 0.5; cx.setLineDash([4, 4]);
+  // ±½ LSB and ±1 LSB reference dashes
+  cx.strokeStyle = '#1d2742'; cx.lineWidth = 0.5; cx.setLineDash([4,4]);
   for (const f of [0.5, 1, -0.5, -1]) {
     const y = yCen - f * lsb * yScl;
     cx.beginPath(); cx.moveTo(p.x0, y); cx.lineTo(p.x1, y); cx.stroke();
   }
   cx.setLineDash([]);
 
-  // Time axis helper: map sample time to x
-  function xOf(k) {
-    return p.x0 + (k * S.Ts - (S.t - tSpan)) / tSpan * pw(p);
-  }
+  // Map sample index k to x position (now = right edge)
+  const xOf = k => p.x0 + (k * S.Ts - (S.t - tSpan)) / tSpan * pw(p);
 
-  // Error staircase (horizontal holds between samples)
+  // Error staircase: error is constant between sample instants
   cx.strokeStyle = '#ff4444'; cx.lineWidth = 1.5;
   cx.beginPath();
   let started = false;
@@ -656,100 +693,82 @@ function drawNoise() {
     const xS  = xOf(k), xE = xOf(k + 1);
     const y   = yCen - err * yScl;
     if (!started) { cx.moveTo(Math.max(p.x0, xS), y); started = true; }
-    else          cx.lineTo(Math.max(p.x0, xS), y);  // vertical step
-    cx.lineTo(Math.min(p.x1, xE), y);                 // horizontal hold
+    else          cx.lineTo(Math.max(p.x0, xS), y);   // vertical step
+    cx.lineTo(Math.min(p.x1, xE), y);                  // horizontal hold
   }
   cx.stroke();
 
-  // "Now" marker
-  cx.strokeStyle = '#ffd400'; cx.lineWidth = 1; cx.setLineDash([4, 3]);
+  // "Now" marker (right edge)
+  cx.strokeStyle = '#ffd400'; cx.lineWidth = 1; cx.setLineDash([4,3]);
   cx.beginPath(); cx.moveTo(p.x1, p.y0); cx.lineTo(p.x1, p.y1); cx.stroke();
   cx.setLineDash([]);
 
-  // Y-axis tick labels
   cx.fillStyle = '#506070'; cx.font = '9px monospace'; cx.textAlign = 'left';
-  cx.fillText('+1 LSB', p.x0 + 3, yCen - lsb * yScl - 2);
-  cx.fillText('−1 LSB', p.x0 + 3, yCen + lsb * yScl + 9);
+  cx.fillText('+1 LSB', p.x0+3, yCen - lsb*yScl - 2);
+  cx.fillText('−1 LSB', p.x0+3, yCen + lsb*yScl + 9);
   cx.restore();
 }
 
-// ─── Render: FFT strip ────────────────────────────────────────────────────────
+// ─── FFT strip ────────────────────────────────────────────────────────────────
 function drawFFT() {
   const p = FP;
   panelBg(p);
   cx.fillStyle = '#6090b0'; cx.font = 'bold 10px monospace'; cx.textAlign = 'center';
-  cx.fillText('FFT SPECTRUM  (Hann window, 512 pts, dBFS, log frequency axis)', pcx(p), p.y0 - 5);
+  cx.fillText('FFT SPECTRUM  (Hann 512-pt, dBFS, log-freq axis)', pcx(p), p.y0-5);
   cx.save(); clip(p);
 
   if (!fftMag) { cx.restore(); return; }
 
-  const fs   = 1 / S.Ts;
-  const fNyq = fs / 2;
-  const fMin = fs / FFT_N * 0.8;
-  const lgMin = Math.log10(Math.max(fMin, 0.001));
+  const fs    = 1 / S.Ts;
+  const fNyq  = fs / 2;
+  const fMin  = fs / FFT_N * 0.8;
+  const lgMin = Math.log10(Math.max(fMin, 1e-4));
   const lgMax = Math.log10(fNyq);
   const lgR   = lgMax - lgMin;
   const floor = -80;
 
-  // dB grid
+  // dB grid lines
   cx.strokeStyle = '#1d2742'; cx.lineWidth = 0.5;
-  cx.fillStyle   = '#506070'; cx.font = '9px monospace';
   for (const db of [-20, -40, -60, -80]) {
-    const yFrac = (db - floor) / -floor;
-    const y = p.y1 - yFrac * ph(p);
-    cx.textAlign = 'left';
+    const y = p.y1 - (db - floor) / -floor * ph(p);
     cx.beginPath(); cx.moveTo(p.x0, y); cx.lineTo(p.x1, y); cx.stroke();
-    cx.fillText(`${db} dB`, p.x0 + 3, y - 2);
+    cx.fillStyle = '#506070'; cx.font = '9px monospace'; cx.textAlign = 'left';
+    cx.fillText(`${db} dB`, p.x0+3, y-2);
   }
 
   // Frequency tick marks
-  cx.textAlign = 'center';
-  const fTicks = [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100];
-  for (const f of fTicks) {
+  cx.fillStyle = '#506070'; cx.font = '9px monospace'; cx.textAlign = 'center';
+  for (const f of [0.05,0.1,0.2,0.5,1,2,5,10,20,50,100]) {
     if (f < fMin || f > fNyq) continue;
-    const xFrac = (Math.log10(f) - lgMin) / lgR;
-    const x = p.x0 + xFrac * pw(p);
+    const x = p.x0 + (Math.log10(f) - lgMin) / lgR * pw(p);
     cx.strokeStyle = '#1d2742'; cx.lineWidth = 0.5;
     cx.beginPath(); cx.moveTo(x, p.y0); cx.lineTo(x, p.y1); cx.stroke();
-    cx.fillStyle = '#506070';
-    cx.fillText(f < 1 ? `${f}` : f >= 1000 ? `${f/1000}k` : `${f}`, x, p.y1 + 11);
+    cx.fillText(f >= 1 ? `${f}` : `${f}`, x, p.y1+11);
   }
+  cx.fillText('Hz', p.x1-2, p.y1+11);
 
-  // Spectrum bars
-  for (let i = 1; i < FFT_N / 2; i++) {
+  // Bars
+  for (let i = 1; i < FFT_N >> 1; i++) {
     const f = i * fs / FFT_N;
     if (f <= fMin || f > fNyq) continue;
-    const lf = Math.log10(f);
-    const xFrac = (lf - lgMin) / lgR;
+    const xFrac  = (Math.log10(f)             - lgMin) / lgR;
+    const xFnext = (Math.log10(f + fs/FFT_N)  - lgMin) / lgR;
     if (xFrac < 0 || xFrac > 1) continue;
-    const lfNext = Math.log10(f + fs / FFT_N);
-    const xFnext = Math.min(1, (lfNext - lgMin) / lgR);
     const x1 = p.x0 + xFrac  * pw(p);
-    const x2 = p.x0 + xFnext * pw(p);
+    const x2 = p.x0 + Math.min(1, xFnext) * pw(p);
     const bw = Math.max(1, x2 - x1);
-
-    const db    = fftMag[i];
-    const yFrac = Math.max(0, (db - floor) / -floor);
-    const barH  = yFrac * ph(p);
-
-    // Highlight the input signal frequency
+    const yFrac = Math.max(0, (fftMag[i] - floor) / -floor);
     const isInput = Math.abs(f - S.freq) < fs / FFT_N * 2;
     cx.fillStyle = isInput ? '#39ff14' : '#3b82f6';
-    cx.fillRect(x1, p.y1 - barH, bw, barH);
+    cx.fillRect(x1, p.y1 - yFrac * ph(p), bw, yFrac * ph(p));
   }
-
-  // Hz label on x-axis
-  cx.fillStyle = '#506070'; cx.font = '9px monospace'; cx.textAlign = 'right';
-  cx.fillText('Hz', p.x1 - 2, p.y1 + 11);
-
   cx.restore();
 }
 
 // ─── Main render ──────────────────────────────────────────────────────────────
 function render() {
   cx.clearRect(0, 0, CW, CH);
-  const kNow = Math.floor(S.t / S.Ts);
-  updateFFT(kNow);
+  updateFFT(Math.floor(S.t / S.Ts));
   drawAnalog();
   drawDigital();
   drawNoise();
@@ -782,24 +801,20 @@ function setParam(key, val, labelId, fmt) {
   document.getElementById(labelId).textContent = fmt(val);
   invalidateSD();
 }
-
 function setSpeed(v) {
   S.speed = v;
   document.getElementById('v-speed').textContent = v.toFixed(1) + '×';
 }
-
 function setBits(v) {
   S.bits = v;
   document.getElementById('v-bits').textContent = v + ' b';
   invalidateSD();
 }
-
 function setTs(v) {
   S.Ts = v;
   document.getElementById('v-ts').textContent = v.toFixed(2) + ' s';
   invalidateSD();
 }
-
 function setTaps(v) {
   S.taps = v;
   document.getElementById('v-taps').textContent = v;
@@ -807,46 +822,35 @@ function setTaps(v) {
   resetFFTBuf();
   updateFilterInfo();
 }
-
 function setDither(on) {
   S.dither = on;
   invalidateSD();
 }
-
 function setMode(m) {
   S.mode = m;
-  ['nyq', 'sd1', 'sd2'].forEach(id => document.getElementById('btn-' + id).classList.remove('on'));
-  const map = {nyquist: 'nyq', sigma_delta: 'sd1', sigma_delta2: 'sd2'};
-  document.getElementById('btn-' + map[m]).classList.add('on');
-  // chain bar
-  const labels = {nyquist: 'NYQUIST ADC', sigma_delta: 'ΣΔ 1ST ORDER', sigma_delta2: 'ΣΔ 2ND ORDER'};
-  document.getElementById('cb-adc').textContent = labels[m];
-  document.getElementById('cb-filter').classList.toggle('on', m !== 'nyquist' && S.taps > 1);
+  ['nyq','sd1','sd2'].forEach(id => document.getElementById('btn-'+id).classList.remove('on'));
+  document.getElementById('btn-'+{nyquist:'nyq',sigma_delta:'sd1',sigma_delta2:'sd2'}[m]).classList.add('on');
+  document.getElementById('cb-adc').textContent =
+    {nyquist:'NYQUIST ADC', sigma_delta:'ΣΔ 1ST ORDER', sigma_delta2:'ΣΔ 2ND ORDER'}[m];
   invalidateSD();
   updateFilterInfo();
 }
-
 function togglePause() {
   S.paused = !S.paused;
   const btn = document.getElementById('playbtn');
   btn.textContent = S.paused ? '▶ Play' : '⏸ Pause';
   btn.classList.toggle('paused', S.paused);
 }
-
 function updateFilterInfo() {
-  const K = S.taps, M = S.mode === 'nyquist' ? 1 : S.mode === 'sigma_delta' ? 2 : 3;
-  const info = document.getElementById('filter-info');
-  if (S.mode === 'nyquist') {
-    info.textContent = 'Nyquist: no filter';
-  } else {
-    info.textContent = `sinc${M}, K=${K}, len=${K * M - M + 1}`;
-  }
+  const K = S.taps;
+  const M = S.mode === 'nyquist' ? 1 : S.mode === 'sigma_delta' ? 2 : 3;
+  document.getElementById('filter-info').textContent =
+    S.mode === 'nyquist' ? 'no filter active'
+                         : `sinc${M}, K=${K}, FIR len=${M*(K-1)+1}`;
   document.getElementById('cb-filter').classList.toggle('on', S.mode !== 'nyquist' && K > 1);
   document.getElementById('cb-filter').textContent = `FILTER ×${K}`;
 }
-
-// Update chain noise block when noise slider moves
-document.getElementById('sl-noise').addEventListener('input', function () {
+document.getElementById('sl-noise').addEventListener('input', function() {
   document.getElementById('cb-noise').classList.toggle('on', +this.value > 0);
 });
 </script>
