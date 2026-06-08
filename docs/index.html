@@ -392,7 +392,7 @@ function rawOut(k) {
 // Composite FIR h = [1]*K convolved M times.  sum(h) = K^M (the DC gain).
 // Matches Python's _decimation_taps() and _filt_level().
 let firH = null, firKey = '';
-let stfCache = null, stfKey = '';
+let stfCache = null, stfPhase = 0, stfKey = '';
 
 function getFIR() {
   const K = Math.max(1, S.taps);
@@ -446,9 +446,27 @@ function modSTFmag() {
   const denMag = Math.sqrt(denRe*denRe + denIm*denIm);
   const numMag = Math.sqrt(numRe*numRe + numIm*numIm);
   const stf = denMag > 1e-12 ? numMag / denMag : 1.0;
+  // angle(num/den) = atan2( Im(num·conj(den)), Re(num·conj(den)) )
+  stfPhase = Math.atan2(numIm*denRe - numRe*denIm, numRe*denRe + numIm*denIm);
   stfCache = Math.max(stf, 0.1);
   stfKey   = key;
   return stfCache;
+}
+
+// Group delay of the full decimation path in seconds.
+// = sinc^M filter linear-phase delay  +  modulator STF phase delay.
+// Matches Python's _group_delay() in src/cicadc/manim_scene.py.
+function groupDelay() {
+  const K = Math.max(1, S.taps);
+  if (K <= 1) return 0;
+  const M = S.mode === 'nyquist' ? 1 : S.mode === 'sigma_delta' ? 2 : 3;
+  let D = M * (K - 1) / 2.0 * S.Ts;
+  if (S.mode !== 'nyquist') {
+    modSTFmag();  // ensure stfPhase is populated
+    const w = 2 * Math.PI * S.freq * S.Ts;
+    if (Math.abs(w) > 1e-9) D += (-stfPhase / w) * S.Ts;
+  }
+  return D;
 }
 
 // Magnitude of the full signal path at the signal frequency: sinc^M × |STF|.
@@ -729,6 +747,14 @@ function drawAnalog() {
 
   // Ghost car (pale-green, 60% opacity): raw ADC level at "now"
   drawCar(vX(LP, rawOut(kNow)), yNow, ang, 'green', 0.60);
+  // Gray car: decimated filter output, shown at the group-delay offset in the past
+  if (S.taps > 1) {
+    const D       = groupDelay();
+    const dVis    = Math.min(D, 0.82 * S.win / 2);  // clamp to visible window
+    const K       = S.taps;
+    const kDec    = Math.floor(kNow / K) * K;
+    drawCar(vX(LP, filtOut(kDec)), tY(LP, -dVis), curveAngle(-dVis), 'gray', 1.0);
+  }
   // Blue car: clean analog value at "now"
   drawCar(vX(LP, cleanSig(S.t)), yNow, ang, 'blue', 1.0);
 
@@ -792,8 +818,8 @@ function drawNoise() {
   const fNoise = Math.max(7, Math.round(10 * pxf));
   cx.fillStyle = '#6090b0'; cx.font = `bold ${fNoise}px monospace`; cx.textAlign = 'center';
   const noiseTitle = pxf > 0.75
-    ? 'QUANTISATION ERROR — ADC output vs analog input  (pre-filter)'
-    : 'QUANT ERROR (pre-filter)';
+    ? 'QUANTISATION ERROR — filtered output vs analog input'
+    : 'QUANT ERROR (post-filter)';
   cx.fillText(noiseTitle, pcx(p), p.y0 - Math.round(5*pxf));
   cx.save(); clip(p);
 
@@ -819,17 +845,24 @@ function drawNoise() {
   // Map sample index k to x position (now = right edge)
   const xOf = k => p.x0 + (k * S.Ts - (S.t - tSpan)) / tSpan * pw(p);
 
-  // Error staircase: error is constant between sample instants
+  // Error staircase: filtered output vs time-aligned analog input.
+  // Steps at the decimated rate (K) to match the digital staircase.
+  // sigAt(k·Ts − D) aligns the analog reference to the filter's output time.
+  const D  = groupDelay();
+  const K  = S.taps > 1 ? S.taps : 1;
+  const kd0 = Math.ceil(k0 / K);
+  const kd1 = Math.floor(kNow / K);
   cx.strokeStyle = '#ff4444'; cx.lineWidth = Math.max(0.8, 1.5*pxf);
   cx.beginPath();
   let started = false;
-  for (let k = k0; k <= kNow; k++) {
-    const err = smpVal(k) - rawOut(k);  // pre-filter error: ADC output vs analog input
-    const xS  = xOf(k), xE = xOf(k + 1);
+  for (let kd = kd0; kd <= kd1; kd++) {
+    const k   = kd * K;
+    const err = sigAt(k * S.Ts - D) - filtOut(k);
+    const xS  = xOf(k), xE = xOf(k + K);
     const y   = yCen - err * yScl;
     if (!started) { cx.moveTo(Math.max(p.x0, xS), y); started = true; }
-    else          cx.lineTo(Math.max(p.x0, xS), y);   // vertical step
-    cx.lineTo(Math.min(p.x1, xE), y);                  // horizontal hold
+    else          cx.lineTo(Math.max(p.x0, xS), y);
+    cx.lineTo(Math.min(p.x1, xE), y);
   }
   cx.stroke();
 
@@ -933,7 +966,7 @@ window.addEventListener('resize', resizeCanvas);
 function invalidateSD() {
   c1.clear(); c2.clear(); cKey = '';
   firH = null; firKey = '';
-  stfCache = null; stfKey = '';
+  stfCache = null; stfPhase = 0; stfKey = '';
   resetFFTBuf();
 }
 
