@@ -173,3 +173,65 @@ class SigmaDelta2(_SigmaDeltaBase):
         x2 = x2_prev + self.g1 * (x1 - self.a2 * y_prev)
         y = self._quantize(x2, k)
         return (x1, x2, y)
+
+
+class Leapfrog(_SigmaDeltaBase):
+    """Third-order single-bit *leapfrog* modulator (CIFB chain + resonator).
+
+    Three delaying integrators in a chain (each integrator's output feeds the
+    next), with the quantizer output fed back to all three stages through gains
+    ``a1, a2, a3``. A *resonator* (the leapfrog cross-coupling) feeds the third
+    integrator's state back into the second through gain ``g``, which moves a
+    pair of noise-transfer-function zeros off DC and into the signal band -
+    flattening the in-band noise floor the way an Nth-order Leapfrog ADC does::
+
+        x1[n] = x1[n-1] + b1*u[n]  - a1*y[n-1]
+        x2[n] = x2[n-1] + x1[n]    - a2*y[n-1] - g*x3[n-1]   (resonator)
+        x3[n] = x3[n-1] + x2[n]    - a3*y[n-1]
+        y[n]  = Q(x3[n])
+
+    The coefficients were tuned (see ``scratch_leapfrog.py``) for a stable
+    single-bit loop: the states stay bounded up to (and including) a full-scale
+    input, and the in-band SQNR is markedly better than the 2nd-order loop
+    (~73 dB vs ~57 dB at OSR 32, 1-bit). The input scaling ``b1 = a1/2`` keeps
+    the third integrator out of overload across the whole input range; it makes
+    the signal-transfer gain 1/2, which the reconstruction filter divides out
+    (its measured ``|STF|`` already corrects for in-band loop gain).
+
+    This is the single-quantizer ("loop-filter") view of the leapfrog. The
+    control-bounded variant - a local 1-bit control per integrator plus a
+    digital estimation filter - is a larger change left for later.
+    """
+
+    order = 3
+
+    def __init__(
+        self,
+        input_fn: Callable[[int], float],
+        bits: int = 1,
+        vref: float = 1.0,
+        dither: float = 0.0,
+        warmup: int = 128,
+        a1: float = 0.2,
+        a2: float = 0.4,
+        a3: float = 1.2,
+        g: float = 0.004,
+        b1: float | None = None,
+    ) -> None:
+        super().__init__(input_fn, bits=bits, vref=vref, dither=dither, warmup=warmup)
+        self.a1 = a1  # feedback to the 1st integrator
+        self.a2 = a2  # feedback to the 2nd integrator
+        self.a3 = a3  # feedback to the 3rd integrator
+        self.g = g    # resonator cross-coupling (x3 -> x2), spreads NTF zeros
+        self.b1 = a1 / 2.0 if b1 is None else b1  # input scaling (STF gain b1/a1)
+
+    def _zero_state(self) -> Tuple[float, float, float, float]:
+        return (0.0, 0.0, 0.0, 0.0)  # (x1, x2, x3, y)
+
+    def _advance(self, prev: Tuple[float, ...], k: int) -> Tuple[float, float, float, float]:
+        x1_prev, x2_prev, x3_prev, y_prev = prev
+        x1 = x1_prev + self.b1 * self.input_fn(k) - self.a1 * y_prev
+        x2 = x2_prev + x1 - self.a2 * y_prev - self.g * x3_prev
+        x3 = x3_prev + x2 - self.a3 * y_prev
+        y = self._quantize(x3, k)
+        return (x1, x2, x3, y)

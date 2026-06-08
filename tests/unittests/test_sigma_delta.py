@@ -4,7 +4,7 @@
 import math
 import unittest
 
-from cicadc.sigma_delta import SigmaDelta1, SigmaDelta2
+from cicadc.sigma_delta import SigmaDelta1, SigmaDelta2, Leapfrog
 
 
 class TestSigmaDelta1(unittest.TestCase):
@@ -102,6 +102,73 @@ class TestSigmaDelta2(unittest.TestCase):
             self.assertLessEqual(abs(y), 1.0 + 1e-9)
             self.assertLess(abs(x1), 10.0)
             self.assertLess(abs(x2), 10.0)
+
+
+class TestLeapfrog(unittest.TestCase):
+    def test_order_is_three(self):
+        self.assertEqual(Leapfrog(input_fn=lambda k: 0.0).order, 3)
+
+    def test_one_bit_has_two_levels(self):
+        lf = Leapfrog(input_fn=lambda k: 0.3, bits=1, vref=1.0)
+        lf.prepare(0, 400)
+        levels = {lf.output(k) for k in range(0, 401)}
+        self.assertTrue(levels.issubset({-1.0, 1.0}))
+
+    def test_states_bounded_to_full_scale(self):
+        # The tuned coefficients keep all three integrators bounded even for a
+        # full-scale sine - the design's max stable amplitude is ~1.0 FS.
+        lf = Leapfrog(input_fn=lambda k: 1.0 * math.sin(2 * math.pi * k / 128.0), bits=1)
+        lf.prepare(0, 6000)
+        for k in range(200, 6001):
+            x1, x2, x3, y = lf._cache[k]
+            self.assertLessEqual(abs(y), 1.0 + 1e-9)
+            self.assertLess(abs(x1), 5.0)
+            self.assertLess(abs(x2), 8.0)
+            self.assertLess(abs(x3), 12.0)
+
+    def test_dc_recovered_with_half_scale_stf(self):
+        # Input scaling b1 = a1/2 makes the signal-transfer gain 1/2, so the
+        # coarse stream averages to half the DC input.
+        dc = 0.4
+        lf = Leapfrog(input_fn=lambda k: dc, bits=1)
+        lf.prepare(0, 6000)
+        ys = [lf.output(k) for k in range(400, 6001)]
+        self.assertAlmostEqual(sum(ys) / len(ys), 0.5 * dc, delta=0.02)
+
+    def test_noise_shaping_beats_second_order(self):
+        # In-band quantization noise (sum of |y - mean| spectrum below f_s/2/OSR)
+        # should be much lower than the 2nd-order loop for the same input.
+        import cmath
+
+        def insig(k):
+            return 0.5 * math.sin(2 * math.pi * k * (1.0 / 256.0))
+
+        def inband_noise(mod):
+            mod.prepare(0, 8192)
+            ys = [mod.output(k) for k in range(0, 8192)]
+            # crude in-band power: DFT magnitude over the lowest OSR=32 band,
+            # excluding the signal bin at k=8192/256=32.
+            N = len(ys)
+            osr_bins = N // (2 * 32)
+            pw = 0.0
+            for b in range(1, osr_bins):
+                if abs(b - N // 256) <= 1:
+                    continue
+                acc = sum(ys[n] * cmath.exp(-2j * math.pi * b * n / N) for n in range(N))
+                pw += abs(acc) ** 2
+            return pw
+
+        lf = inband_noise(Leapfrog(input_fn=insig, bits=1))
+        sd2 = inband_noise(SigmaDelta2(input_fn=insig, bits=1))
+        self.assertLess(lf, sd2)
+
+    def test_deterministic_and_cache_extends(self):
+        lf = Leapfrog(input_fn=lambda k: 0.25, bits=1)
+        lf.prepare(0, 100)
+        snapshot = [lf.output(k) for k in range(0, 101)]
+        lf.prepare(101, 200)
+        for k in range(0, 101):
+            self.assertEqual(lf.output(k), snapshot[k])
 
 
 if __name__ == "__main__":
