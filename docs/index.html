@@ -1067,5 +1067,240 @@ document.getElementById('sl-noise').addEventListener('input', function() {
   document.getElementById('cb-noise').classList.toggle('on', +this.value > 0);
 });
 </script>
+
+<!-- ─── Article ────────────────────────────────────────────────────────────── -->
+<style>
+#article {
+  width: 100%; max-width: 780px;
+  color: #c8d8f0; font-family: Georgia, 'Times New Roman', serif;
+  font-size: 15px; line-height: 1.75;
+  padding: 32px 16px 48px;
+}
+#article h2 {
+  color: #3361e6; font-size: 20px; letter-spacing: 2px;
+  font-family: 'Courier New', monospace;
+  margin: 2.2em 0 0.6em; padding-bottom: 4px;
+  border-bottom: 1px solid #1d2742;
+}
+#article h3 {
+  color: #8aabdd; font-size: 15px; letter-spacing: 1px;
+  font-family: 'Courier New', monospace;
+  margin: 1.6em 0 0.4em;
+}
+#article p  { margin: 0.8em 0; }
+#article ul { margin: 0.6em 0 0.6em 1.4em; }
+#article li { margin: 0.35em 0; }
+#article code {
+  background: #0f1526; color: #ffd400;
+  padding: 1px 5px; border-radius: 3px;
+  font-family: 'Courier New', monospace; font-size: 13px;
+}
+#article .yt-wrap {
+  position: relative; padding-bottom: 56.25%; height: 0;
+  overflow: hidden; border: 1px solid #1d2742;
+  margin: 1.2em 0;
+}
+#article .yt-wrap iframe {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+}
+#article .note {
+  background: #0d1830; border-left: 3px solid #3361e6;
+  padding: 10px 14px; margin: 1.2em 0; font-size: 14px; color: #8aabdd;
+}
+#article table {
+  width: 100%; border-collapse: collapse; margin: 1em 0; font-size: 14px;
+}
+#article th {
+  color: #3361e6; font-family: 'Courier New', monospace;
+  font-size: 12px; letter-spacing: 1px; text-align: left;
+  border-bottom: 1px solid #2b3a63; padding: 4px 8px;
+}
+#article td {
+  padding: 5px 8px; border-bottom: 1px solid #1d2742; vertical-align: top;
+}
+#article tr:last-child td { border-bottom: none; }
+</style>
+
+<div id="article">
+
+  <h2>VIDEO INTRODUCTION</h2>
+  <div class="yt-wrap">
+    <iframe src="https://www.youtube.com/embed/O7SU-is_uwQ"
+            title="cicadc video introduction"
+            frameborder="0"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            allowfullscreen></iframe>
+  </div>
+
+  <h2>INTRODUCTION TO ADCs</h2>
+  <p>
+    An <strong>Analog-to-Digital Converter (ADC)</strong> is the bridge between the continuous
+    physical world and the discrete digital world. A microphone, a temperature sensor, a radio
+    receiver — all produce voltages that vary smoothly over time. A processor can only work with
+    numbers. The ADC samples that voltage at regular intervals and assigns each sample a binary
+    code, turning sound, light, and temperature into bits.
+  </p>
+  <p>
+    Two properties define what an ADC can represent:
+  </p>
+  <ul>
+    <li><strong>Sample rate</strong> — how many samples per second (Hz). By the
+        <em>Nyquist–Shannon sampling theorem</em>, a signal must be sampled at least twice its
+        highest frequency to be reconstructed without aliasing.</li>
+    <li><strong>Resolution (bits)</strong> — how many distinct levels the output can take.
+        An <em>N</em>-bit ADC has 2<sup>N</sup> levels; each extra bit halves the quantization
+        step and reduces quantization noise by ~6 dB.</li>
+  </ul>
+  <p>
+    Quantization noise is the rounding error introduced every time a continuous value is mapped
+    to the nearest discrete level. For a full-scale sine wave in an ideal <em>N</em>-bit ADC the
+    signal-to-noise ratio is approximately <code>6.02·N + 1.76 dB</code>.
+    The animated visualiser above lets you watch this tradeoff live: drag the
+    <em>Bits</em> slider and watch the staircase steps (and the noise strip) change.
+  </p>
+
+  <h2>NYQUIST ADC vs SIGMA–DELTA</h2>
+  <p>
+    There are two fundamentally different strategies for digitising a signal. The visualiser
+    implements both so you can compare them side by side.
+  </p>
+
+  <h3>Nyquist-rate ADC</h3>
+  <p>
+    A <strong>Nyquist ADC</strong> samples the input at exactly the rate required by the
+    bandwidth of interest — one sample per Nyquist interval. Every sample uses all
+    <em>N</em> bits of resolution. This is what a classic successive-approximation (SAR) or
+    pipeline ADC does. Achieving high resolution requires precise analog components (matched
+    capacitors, accurate references), which become harder to build as process nodes shrink.
+  </p>
+  <div class="note">
+    In the visualiser: select <em>Nyquist</em>, set <em>Filter taps K = 1</em>.
+    Each yellow dot becomes one step on the digital staircase. The noise strip shows the
+    rounding error — bounded by ±½ LSB.
+  </div>
+
+  <h3>Sigma–Delta (ΣΔ) ADC</h3>
+  <p>
+    A <strong>sigma–delta ADC</strong> takes the opposite approach: sample much faster than
+    strictly necessary (<em>oversampling</em>), but use a very coarse quantizer — even just 1 bit.
+    A feedback loop called the <em>modulator</em> shapes the quantization noise so that it is
+    pushed out of the signal band, into high frequencies where a digital <em>decimation filter</em>
+    can remove it. The result can achieve very high effective resolution using only simple,
+    well-matched digital circuits.
+  </p>
+  <p>
+    The tradeoff: ΣΔ ADCs trade <em>speed</em> for <em>resolution</em>. They are ideal for
+    audio (24-bit at 192 kHz), sensor readout, and instrumentation — but not for wideband RF
+    receivers that need simultaneous high speed and high resolution.
+  </p>
+  <div class="note">
+    In the visualiser: select <em>ΣΔ 1st</em> or <em>ΣΔ 2nd</em>, then increase
+    <em>Filter taps K</em>. Watch the pale-green coarse stream bounce rail-to-rail while the
+    white filtered output smoothly tracks the analog sine. The noise strip collapses as K grows.
+  </div>
+
+  <h3>1st-order vs 2nd-order modulator</h3>
+  <p>
+    The <em>order</em> of the sigma–delta modulator sets how aggressively noise is shaped:
+  </p>
+  <table>
+    <tr><th>Order</th><th>Noise shaping</th><th>In-band noise reduction per octave of OSR</th><th>Typical use</th></tr>
+    <tr><td>1st</td><td>(1 − z⁻¹)</td><td>9 dB</td><td>Simple, always stable</td></tr>
+    <tr><td>2nd</td><td>(1 − z⁻¹)²</td><td>15 dB</td><td>Excellent SNR, needs careful design</td></tr>
+  </table>
+  <p>
+    The decimation filter is a sinc<sup>M</sup> cascade (M = modulator order + 1), matched to the
+    noise shaping to maximise stop-band rejection. A higher oversampling ratio K also helps: each
+    doubling of K reduces in-band noise by an extra 3 dB beyond the shaping benefit.
+  </p>
+
+  <h2>HOW THE CODE WORKS</h2>
+  <p>
+    <strong>cicadc</strong> began as a Python/Manim desktop app for teaching ADC concepts in
+    lectures. The core simulation lives in <code>src/cicadc/</code>; the browser visualiser in
+    <code>docs/index.html</code> is a pure HTML5 + JavaScript reimplementation that runs
+    entirely in the browser with no server.
+  </p>
+
+  <h3>Signal chain</h3>
+  <p>
+    The simulation mirrors the real analog signal chain shown at the top of the page:
+  </p>
+  <ul>
+    <li><strong>Analog signal</strong> — a sinusoid (<code>cleanSig</code>) plus optional
+        value-noise (<code>noiseAt</code>), both evaluated analytically so they never flicker
+        between frames.</li>
+    <li><strong>ADC</strong> — either a mid-tread Nyquist quantizer (<code>nyQ</code>) or a
+        1st/2nd-order sigma–delta modulator (<code>sd1</code> / <code>sd2</code>). The SD
+        modulators are causal recursive filters with a per-index cache and a 128-sample warm-up,
+        so any frame can jump to any time without recomputing from scratch.</li>
+    <li><strong>Decimation filter</strong> — a sinc<sup>M</sup> FIR built by convolving M
+        boxcar filters of length K (<code>getFIR</code>). Applied via <code>filtOut(k)</code>,
+        which evaluates the sliding dot product at every sample index, not just at multiples
+        of K — this gives a smooth continuous staircase rather than chunky decimated blocks.</li>
+    <li><strong>Gain correction</strong> — <code>filtGain()</code> computes the sinc<sup>M</sup>
+        frequency response at the signal frequency, multiplied by the modulator's signal transfer
+        function magnitude <code>|STF(e^jω)|</code> measured by a Hann-windowed DFT lock-in
+        (<code>modSTFmag()</code>). Dividing by this gain makes the reconstructed amplitude
+        exactly match the analog input regardless of frequency or bit depth.</li>
+    <li><strong>Group delay compensation</strong> — <code>groupDelay()</code> computes the total
+        latency of the filter path (linear phase delay of the sinc<sup>M</sup> plus the phase
+        delay of the STF). The filtered staircase is time-shifted by this amount so it aligns
+        with the analog signal visually.</li>
+  </ul>
+
+  <h3>Rendering</h3>
+  <p>
+    Everything is drawn each frame onto a single <code>&lt;canvas&gt;</code> element scaled by
+    <code>devicePixelRatio</code> for sharp rendering on high-DPI screens. Four panels share
+    the canvas:
+  </p>
+  <ul>
+    <li><strong>LP</strong> (left) — analog signal as a smooth curve with sample dots and the
+        three cars: blue (analog), green ghost (raw ADC), gray (filtered output at its group-delay
+        position).</li>
+    <li><strong>RP</strong> (right) — digital signal: the coarse ADC/modulator staircase in pale
+        green, plus the filtered reconstruction in white, both delay-compensated.</li>
+    <li><strong>NP</strong> (bottom-left) — quantization noise strip:
+        <code>cleanSig(t − D) − filtOut(k)</code>, normalised to ±1 LSB, showing the residual
+        error after the decimation filter.</li>
+    <li><strong>FP</strong> (bottom-right) — 512-point Hann-windowed FFT of the digital output
+        on a log-frequency axis, updated every new sample.</li>
+  </ul>
+  <p>
+    The layout is fully responsive: on screens narrower than 700 px the four panels stack
+    vertically and all fonts and line widths scale with a <code>pxf</code> factor derived from
+    the panel width.
+  </p>
+
+  <h2>HISTORY</h2>
+  <p>
+    The project started on <strong>5 June 2026</strong> with a Python/Manim desktop application
+    designed to animate the ADC conversion process for classroom use — inspired by an idea from
+    Domen Visnar. Within a day, a 1st-order sigma–delta modulator and slider controls were added,
+    followed by 2nd-order ΣΔ with sinc<sup>N</sup> decimation, a quantization noise strip, and
+    an FFT display (v0.3.0).
+  </p>
+  <p>
+    On <strong>6 June 2026</strong> the app gained cross-platform binary builds (macOS, Linux,
+    Windows via PyInstaller), a drag-to-Applications macOS DMG, and MP4 recording — making it
+    easy to distribute and use in lecture recordings.
+  </p>
+  <p>
+    Also on <strong>6–7 June 2026</strong> a native <strong>Swift iOS app</strong> was added so
+    the visualiser could run on an iPad or iPhone without any desktop software. The iOS version
+    reproduces the full signal chain — ΣΔ modulators, decimation filters, FFT — in Swift, and
+    introduced the pixel-art car sprites that now animate along the signal curve on all platforms.
+  </p>
+  <p>
+    On <strong>8 June 2026</strong> the <strong>browser version</strong> (<code>docs/index.html</code>)
+    was created — a single self-contained HTML file that runs in any modern browser with no
+    installation. It brought responsive mobile layout, high-DPI canvas rendering, and a series
+    of accuracy improvements: the STF lock-in gain correction, proper group-delay compensation,
+    and a post-filter noise strip that correctly shows the residual after reconstruction.
+    The browser version is what you see at the top of this page.
+  </p>
+
+</div>
 </body>
 </html>
