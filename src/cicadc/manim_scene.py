@@ -564,7 +564,10 @@ class AdcScene:
 
         # Unfiltered (gray) staircase at the true sample times, with sample dots.
         # When the filter is off it is the only output, so draw it more boldly.
-        raw_pts, raw_dots = self._hold_staircase(self._raw_level, self._x_dig, -half, half, delay=0.0)
+        # For the control-bounded mode the "raw" level is already the estimate,
+        # so it carries the estimator's half-control-period delay.
+        raw_delay = delay if self.chain.is_control_bounded() else 0.0
+        raw_pts, raw_dots = self._hold_staircase(self._raw_level, self._x_dig, -half, half, delay=raw_delay)
         if K > 1:
             # With a decimator/filter active, the raw trace is the coarse
             # quantizer/modulator output (pale green) and the filtered trace is
@@ -728,7 +731,9 @@ class AdcScene:
         sig = self.signal
         K = max(1, int(self.filter_taps))
         full = self._noise_full()
-        delay = self._group_delay() if K > 1 else 0.0
+        # group_delay() is already 0 without a decimator; for the control-bounded
+        # mode it carries the half-control-period delay of the held 1-bit pulses.
+        delay = self._group_delay()
         hist = self.ns_hist
 
         first_k, last_k = sig.sample_indices_in(-hist + delay, delay)

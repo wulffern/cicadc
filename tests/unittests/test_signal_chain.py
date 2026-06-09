@@ -98,15 +98,20 @@ class TestSignalChain(unittest.TestCase):
         c = SignalChain(signal=sig, quantizer=Quantizer(bits=1))
         c.set_adc_mode(CONTROL_BOUNDED_MODE)
         self.assertTrue(c.is_control_bounded())
-        self.assertEqual(c.group_delay(), 0.0)       # estimator is centred
+        # The held 1-bit control pulses delay the reconstruction by half a
+        # control period (measured by lock-in), reported as the group delay.
+        self.assertEqual(c.group_delay(), 0.5 * sig.sample_period)
         self.assertEqual(c.filter_gain(), 1.0)
         k0 = sig.sample_index_now()
-        est = np.array([c.filt_level(k) for k in range(k0 - 250, k0 - 40)])
-        clean = np.array([sig.sample_value_clean(k) for k in range(k0 - 250, k0 - 40)])
+        ks = np.arange(k0 - 250, k0 - 40)
+        est = np.array([c.filt_level(int(k)) for k in ks])
+        # Compare against the clean input delayed by the group delay.
+        t = ks * sig.sample_period - c.group_delay()
+        clean = sig.amplitude * np.sin(2.0 * np.pi * sig.frequency * t)
         # The estimate reconstructs the analog input (a few percent amplitude,
         # small RMS error) — far better than chance for a 1-bit converter.
         self.assertLess(abs(np.nanmax(np.abs(est)) - np.nanmax(np.abs(clean))), 0.08)
-        self.assertLess(np.sqrt(np.mean((est - clean) ** 2)), 0.06)
+        self.assertLess(np.sqrt(np.mean((est - clean) ** 2)), 0.05)
 
     def test_control_bounded_reset_clears_cache(self):
         c = self._chain()

@@ -239,8 +239,8 @@ class SignalChain:
         A filtered output is delay-compensated so its held value lines up in
         time with the analog signal it represents.
         """
-        if self.is_control_bounded():        # estimator is centred (zero delay)
-            return self._cb_estimate(self.signal.sample_index_at(t_rel))
+        if self.is_control_bounded():        # half-sample delay (see group_delay)
+            return self._cb_estimate(self.signal.sample_index_at(t_rel + self.group_delay()))
         if int(self.filter_taps) > 1:
             k = self.signal.sample_index_at(t_rel + self.group_delay())
             return self.filt_level(k)
@@ -325,7 +325,13 @@ class SignalChain:
         dependent) delay ``-arg(STF)/w``.
         """
         if self.is_control_bounded():
-            return 0.0                        # the estimator is centred (non-causal)
+            # The estimator is a zero-phase smoother relative to the *control*
+            # waveform, but each 1-bit decision (taken at nT) acts over the
+            # following hold interval [nT, (n+1)T): its effective time-centre
+            # is (n + 1/2)T. Referenced to the sample grid the reconstruction
+            # therefore trails by half a control period (measured by lock-in:
+            # +0.50 samples across OSRs).
+            return 0.5 * self.signal.sample_period
         K = max(1, int(self.filter_taps))
         M = self.filter_order()
         delay = M * (K - 1) / 2.0 * self.signal.sample_period
