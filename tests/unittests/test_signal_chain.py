@@ -113,6 +113,17 @@ class TestSignalChain(unittest.TestCase):
         self.assertLess(abs(np.nanmax(np.abs(est)) - np.nanmax(np.abs(clean))), 0.08)
         self.assertLess(np.sqrt(np.mean((est - clean) ** 2)), 0.05)
 
+    def test_cb_bits_are_one_bit_per_integrator(self):
+        c = self._chain()
+        c.set_adc_mode(CONTROL_BOUNDED_MODE)
+        k0 = c.signal.sample_index_now()
+        for k in range(k0 - 20, k0):
+            bits = c.cb_bits(k)
+            self.assertEqual(bits.shape, (3,))
+            self.assertTrue(set(np.unique(bits)).issubset({-1.0, 1.0}))
+        # deterministic across reads
+        self.assertTrue(np.array_equal(c.cb_bits(k0 - 5), c.cb_bits(k0 - 5)))
+
     def test_control_bounded_reset_clears_cache(self):
         c = self._chain()
         c.set_adc_mode(CONTROL_BOUNDED_MODE)

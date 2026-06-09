@@ -179,6 +179,16 @@ class SignalChain:
         if self._cb_cmax - self._cb_cmin > 40000:
             self._cb_cmin = self._cb_cmax = None
 
+    def cb_bits(self, k: int) -> np.ndarray:
+        """The N local 1-bit control decisions ``s[k]`` (one per integrator).
+
+        These ARE the converter's digital output: no single stream carries the
+        signal — the estimate is computed from all of them. Exposed so a
+        renderer can draw the raw bit-streams alongside the reconstruction.
+        """
+        self._cb_fill(k, k)
+        return np.where(self._cb_state[k] >= 0.0, 1.0, -1.0)
+
     def _cb_estimate(self, k: int) -> float:
         """Reconstructed (estimated) input ``u_hat[k]`` from the control bits."""
         K = self._cb_K

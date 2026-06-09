@@ -562,6 +562,20 @@ class AdcScene:
             k_hi = sig.sample_index_at(half + delay) + 2
             self._modulator().prepare(k_lo, k_hi)
 
+        # Control-bounded mode: the converter's actual digital output is the N
+        # local 1-bit control streams. Draw them as thin staircases near the
+        # rails (at the true sample times) so the estimate is visibly *derived*
+        # from them rather than being a mystery staircase.
+        if self.chain.is_control_bounded():
+            for lane_i, (lane, color) in enumerate(
+                zip((0.80, 0.88, 0.96), (QUANT, "#8fd0d8", "#c9a7e8"))
+            ):
+                pts, _ = self._hold_staircase(
+                    lambda k, i=lane_i, a=lane: a * float(self.chain.cb_bits(k)[i]),
+                    self._x_dig, -half, half, delay=0.0,
+                )
+                items.append(self._polyline(pts, color, 1.2))
+
         # Unfiltered (gray) staircase at the true sample times, with sample dots.
         # When the filter is off it is the only output, so draw it more boldly.
         # For the control-bounded mode the "raw" level is already the estimate,
