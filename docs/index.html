@@ -1664,6 +1664,100 @@ document.getElementById('sl-noise').addEventListener('input', function() {
     than the first-order loop.
   </p>
 
+  <h3>3rd-order leapfrog (single loop)</h3>
+  <p>
+    The <em>LF 3rd</em> mode chains three delaying integrators with the quantized output fed
+    back to every stage (gains \(a_1 = 0.2,\ a_2 = 0.4,\ a_3 = 1.2\)), plus a <em>resonator</em>
+    cross-coupling \(g = 0.004\) that feeds \(x_3\) back into \(x_2\):
+  </p>
+  \[
+    \begin{aligned}
+    x_1[n] &= x_1[n-1] + b_1 u[n] - a_1\,y[n-1] \\
+    x_2[n] &= x_2[n-1] + x_1[n] - a_2\,y[n-1] - g\,x_3[n-1] \\
+    x_3[n] &= x_3[n-1] + x_2[n] - a_3\,y[n-1],
+    \qquad y[n] = Q\big(x_3[n]\big).
+    \end{aligned}
+  \]
+  <p>
+    Substituting each stage into the next gives the closed-form state-space matrices
+  </p>
+  \[
+    \mathbf{A} = \begin{bmatrix} 1 & 0 & 0 \\ 1 & 1 & -g \\ 1 & 1 & 1-g \end{bmatrix},
+    \quad
+    \mathbf{B} = b_1\!\begin{bmatrix} 1 \\ 1 \\ 1 \end{bmatrix},
+    \quad
+    \boldsymbol{\Gamma} = \begin{bmatrix} -a_1 \\ -(a_1{+}a_2) \\ -(a_1{+}a_2{+}a_3) \end{bmatrix}
+                        = \begin{bmatrix} -0.2 \\ -0.6 \\ -1.8 \end{bmatrix},
+    \quad
+    \mathbf{c}^{\!\top} = [\,0\ \ 0\ \ 1\,].
+  \]
+  <p>
+    The resonator moves a pair of NTF zeros off DC to \(\omega \approx \pm\sqrt{g} \approx
+    \pm 0.06\) rad/sample, spreading the in-band notch the way an Nth-order leapfrog ladder
+    does. The input scaling \(b_1 = a_1/2 = 0.1\) keeps the loop stable to a full-scale input;
+    the resulting signal-transfer gain of \(\tfrac{1}{2}\) is measured by the lock-in
+    \(|\mathrm{STF}|\) and divided out by the reconstruction filter.
+  </p>
+
+  <h3>Control-bounded leapfrog</h3>
+  <p>
+    The <em>LF CB</em> mode abandons the single quantizer entirely. The leapfrog ladder
+    (forward gain \(\beta = 0.4\), backward coupling \(\alpha = 0.004\)) runs with a
+    <em>local</em> 1-bit control on every integrator:
+  </p>
+  \[
+    \mathbf{x}[n{+}1] = \mathbf{A}_d\,\mathbf{x}[n] + \mathbf{B}_d\,u[n]
+                        + \boldsymbol{\Gamma}\,\mathbf{s}[n],
+    \qquad s_\ell[n] = \mathrm{sign}\big(x_\ell[n]\big),
+  \]
+  \[
+    \mathbf{A}_d = \begin{bmatrix} 1 & -\alpha & 0 \\ \beta & 1 & -\alpha \\ 0 & \beta & 1 \end{bmatrix},
+    \qquad
+    \mathbf{B}_d = \begin{bmatrix} \beta \\ 0 \\ 0 \end{bmatrix},
+    \qquad
+    \boldsymbol{\Gamma} = -\kappa\,\mathbf{I},\ \ \kappa = 0.8 .
+  \]
+  <p>
+    Because every integrator is individually steered back toward zero, the states are bounded
+    by construction — no overload, whatever the input. The price is that no single bit stream
+    <em>is</em> the output: the input must be <em>estimated</em> from all three control
+    sequences. The estimate is a non-causal FIR over a window of \(\pm K\) control samples,
+  </p>
+  \[
+    \hat{u}[n] = \sum_{j=0}^{K-1} \mathbf{h}_f[j]^{\!\top}\,\mathbf{s}[n{-}1{-}j]
+               + \sum_{k=0}^{K-1} \mathbf{h}_b[k]^{\!\top}\,\mathbf{s}[n{+}k],
+  \]
+  <p>
+    whose taps come from the steady-state Wiener (smoothing) solution: two algebraic Riccati
+    equations
+  </p>
+  \[
+    \mathbf{A}\mathbf{V}_f + \mathbf{V}_f\mathbf{A}^{\!\top}
+      - \tfrac{1}{\eta^2}\mathbf{V}_f\mathbf{V}_f + \mathbf{B}\mathbf{B}^{\!\top} = 0,
+    \qquad
+    -\mathbf{A}\mathbf{V}_b - \mathbf{V}_b\mathbf{A}^{\!\top}
+      - \tfrac{1}{\eta^2}\mathbf{V}_b\mathbf{V}_b + \mathbf{B}\mathbf{B}^{\!\top} = 0,
+  \]
+  <p>
+    give the forward/backward closed-loop matrices
+    \(\mathbf{A}_f = e^{(\mathbf{A} - \mathbf{V}_f/\eta^2)T}\),
+    \(\mathbf{A}_b = e^{-(\mathbf{A} + \mathbf{V}_b/\eta^2)T}\) and
+    \(\mathbf{W} = (\mathbf{V}_f + \mathbf{V}_b)^{-1}\mathbf{B}\), from which
+    \(\mathbf{h}_f[j] = -\mathbf{B}_f^{\!\top}(\mathbf{A}_f^{\!\top})^{j}\,\mathbf{W}\) and
+    \(\mathbf{h}_b[k] = -\mathbf{B}_b^{\!\top}(\mathbf{A}_b^{\!\top})^{k}\,\mathbf{W}\)
+    (this page solves the Riccati equations live, by Kleinman–Newton iteration). The bandwidth
+    parameter \(\eta^2 = |G(e^{j\omega_B})|^2\) sets the estimator band edge; the resulting
+    signal transfer
+  </p>
+  \[
+    \mathrm{STF}(\omega) = \frac{|G(\omega)|^2}{|G(\omega)|^2 + \eta^2}
+  \]
+  <p>
+    is <em>real</em> — a zero-phase smoother. The only latency left is half a control period,
+    \(T/2\), because each decision \(s_\ell[n]\) acts over the <em>following</em> hold interval
+    \([nT, (n{+}1)T)\); the visualiser compensates exactly this delay.
+  </p>
+
   <h2>HOW THE CODE WORKS</h2>
   <p>
     <strong>cicadc</strong> began as a Python/Manim desktop app for teaching ADC concepts in
