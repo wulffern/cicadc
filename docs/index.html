@@ -102,6 +102,11 @@ canvas {
   .cr label { min-width: 70px; }
   .modebtn { font-size: 10px; padding: 3px 2px; }
 }
+/* Portrait phones: two control columns leave the sliders ~25px of track
+   (labels + value readouts eat the cell width), so stack the groups. */
+@media (max-width: 480px) {
+  #ctrl { grid-template-columns: 1fr; gap: 10px; }
+}
 </style>
 </head>
 <body>
