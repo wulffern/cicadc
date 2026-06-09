@@ -75,7 +75,9 @@ canvas {
   flex: 1; text-align: center;
 }
 .modebtn.on { background: var(--curve); color: #fff; border-color: var(--curve); }
-.moderow { display: flex; gap: 5px; }
+/* 5 mode buttons: grid wraps them 3+2 so they never overflow the cell
+   (flex items refuse to shrink below their label width). */
+.moderow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
 #playbtn {
   width: 100%; padding: 5px; cursor: pointer; font-family: inherit; font-size: 12px;
   background: var(--grid); border: 1px solid var(--edge); color: var(--text);
@@ -98,6 +100,7 @@ canvas {
   .cb   { font-size: 8px; padding: 2px 1px; letter-spacing: 0; }
   .ca   { font-size: 8px; }
   .cr label { min-width: 70px; }
+  .modebtn { font-size: 10px; padding: 3px 2px; }
 }
 </style>
 </head>
@@ -1378,7 +1381,7 @@ function updateFilterInfo() {
   const info = document.getElementById('filter-info');
   const cbF  = document.getElementById('cb-filter');
   if (S.mode === 'leapfrog_cb') {
-    info.textContent = `estimator FIR, 2×${CB_K} taps (taps slider unused)`;
+    info.textContent = `estimator FIR, 2×${CB_K} taps — K unused`;
     cbF.classList.add('on');
     cbF.textContent = 'ESTIMATOR';
   } else {
