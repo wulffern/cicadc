@@ -75,7 +75,9 @@ canvas {
   flex: 1; text-align: center;
 }
 .modebtn.on { background: var(--curve); color: #fff; border-color: var(--curve); }
-.moderow { display: flex; gap: 5px; }
+/* 5 mode buttons: grid wraps them 3+2 so they never overflow the cell
+   (flex items refuse to shrink below their label width). */
+.moderow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
 #playbtn {
   width: 100%; padding: 5px; cursor: pointer; font-family: inherit; font-size: 12px;
   background: var(--grid); border: 1px solid var(--edge); color: var(--text);
@@ -98,6 +100,7 @@ canvas {
   .cb   { font-size: 8px; padding: 2px 1px; letter-spacing: 0; }
   .ca   { font-size: 8px; }
   .cr label { min-width: 70px; }
+  .modebtn { font-size: 10px; padding: 3px 2px; }
 }
 </style>
 </head>
@@ -122,6 +125,8 @@ canvas {
       <button class="modebtn on" id="btn-nyq" onclick="setMode('nyquist')">Nyquist</button>
       <button class="modebtn"   id="btn-sd1" onclick="setMode('sigma_delta')">ΣΔ 1st</button>
       <button class="modebtn"   id="btn-sd2" onclick="setMode('sigma_delta2')">ΣΔ 2nd</button>
+      <button class="modebtn"   id="btn-lf"  onclick="setMode('leapfrog')">LF 3rd</button>
+      <button class="modebtn"   id="btn-cb"  onclick="setMode('leapfrog_cb')">LF CB</button>
     </div>
     <div class="ditrow">
       <input type="checkbox" id="dithcb" onchange="setDither(this.checked)">
@@ -332,14 +337,18 @@ function sdQ(v, k) {
 }
 
 // ─── Sigma-delta caches ───────────────────────────────────────────────────────
-let c1 = new Map(), c2 = new Map(), cKey = '';
+let c1 = new Map(), c2 = new Map(), c3 = new Map(), cKey = '';
 
 function sdCacheKey() {
   return `${S.bits}|${S.dither}|${S.freq}|${S.amp}|${S.Ts}|${S.noise}`;
 }
 function checkCache() {
   const k = sdCacheKey();
-  if (k !== cKey) { c1.clear(); c2.clear(); cKey = k; resetFFTBuf(); }
+  if (k !== cKey) {
+    c1.clear(); c2.clear(); c3.clear(); cKey = k;
+    cbState.clear(); cbEst.clear(); cbCMin = cbCMax = null;
+    resetFFTBuf();
+  }
 }
 
 // 1st-order: x[n] = x[n-1] + (u[n] − y[n-1]),  y[n] = Q(x[n])
@@ -394,9 +403,41 @@ function sd2(k) {
   return s[2];
 }
 
+// 3rd-order single-loop leapfrog (CIFB chain + resonator), tuned coefficients
+// a1=0.2, a2=0.4, a3=1.2, g=0.004, b1=a1/2 (STF gain 1/2, divided out by the
+// measured |STF| in filtGain):
+//   x1[n] = x1[n-1] + b1·u[n] − a1·y[n-1]
+//   x2[n] = x2[n-1] + x1[n]   − a2·y[n-1] − g·x3[n-1]   (resonator)
+//   x3[n] = x3[n-1] + x2[n]   − a3·y[n-1]
+//   y[n]  = Q(x3[n])
+// Reference: src/cicadc/sigma_delta.py  Leapfrog
+function sdLF(k) {
+  checkCache();
+  const hit = c3.get(k);
+  if (hit) return hit[3];
+  const step = (p, n) => {
+    const u  = smpVal(n);
+    const x1 = p[0] + 0.1 * u - 0.2 * p[3];
+    const x2 = p[1] + x1 - 0.4 * p[3] - 0.004 * p[2];
+    const x3 = p[2] + x2 - 1.2 * p[3];
+    return [x1, x2, x3, sdQ(x3, n)];
+  };
+  const prev = c3.get(k - 1);
+  if (prev) {
+    const s = step(prev, k);
+    c3.set(k, s);
+    return s[3];
+  }
+  let s = [0, 0, 0, 0];
+  for (let n = k - 128; n <= k; n++) { s = step(s, n); c3.set(n, s); }
+  return s[3];
+}
+
 function rawOut(k) {
-  if (S.mode === 'sigma_delta')  return sd1(k);
-  if (S.mode === 'sigma_delta2') return sd2(k);
+  if (S.mode === 'sigma_delta')   return sd1(k);
+  if (S.mode === 'sigma_delta2')  return sd2(k);
+  if (S.mode === 'leapfrog')      return sdLF(k);
+  if (S.mode === 'leapfrog_cb')   return cbEstimate(k);
   return nyQ(smpVal(k));
 }
 
@@ -406,9 +447,14 @@ function rawOut(k) {
 let firH = null, firKey = '';
 let stfCache = null, stfPhase = 0, stfKey = '';
 
+// Decimator order M = modulator order + 1 (Nyquist 1, ΣΔ1 2, ΣΔ2 3, leapfrog 4).
+function filtOrder() {
+  return {nyquist: 1, sigma_delta: 2, sigma_delta2: 3, leapfrog: 4}[S.mode] || 1;
+}
+
 function getFIR() {
   const K = Math.max(1, S.taps);
-  const M = S.mode === 'nyquist' ? 1 : S.mode === 'sigma_delta' ? 2 : 3;
+  const M = filtOrder();
   const key = `${K}|${M}`;
   if (key === firKey && firH) return firH;
   let h = [1];
@@ -430,7 +476,7 @@ function getFIR() {
 // Cached by modulator parameters; cleared by invalidateSD().
 // Matches Python's _modulator_stf() in src/cicadc/manim_scene.py.
 function modSTFmag() {
-  if (S.mode === 'nyquist' || S.taps <= 1) return 1.0;
+  if (S.mode === 'nyquist' || S.mode === 'leapfrog_cb' || S.taps <= 1) return 1.0;
   const w = 2 * Math.PI * S.freq * S.Ts;
   if (Math.abs(w) < 1e-6) return 1.0;
 
@@ -469,9 +515,10 @@ function modSTFmag() {
 // = sinc^M filter linear-phase delay  +  modulator STF phase delay.
 // Matches Python's _group_delay() in src/cicadc/manim_scene.py.
 function groupDelay() {
+  if (S.mode === 'leapfrog_cb') return 0;   // the CB estimator is centred
   const K = Math.max(1, S.taps);
   if (K <= 1) return 0;
-  const M = S.mode === 'nyquist' ? 1 : S.mode === 'sigma_delta' ? 2 : 3;
+  const M = filtOrder();
   let D = M * (K - 1) / 2.0 * S.Ts;
   if (S.mode !== 'nyquist') {
     modSTFmag();  // ensure stfPhase is populated
@@ -486,9 +533,10 @@ function groupDelay() {
 // amplitude matches the analog signal.
 // Matches Python's _filter_gain() in src/cicadc/manim_scene.py.
 function filtGain() {
+  if (S.mode === 'leapfrog_cb') return 1.0;  // the CB estimator gives unity gain
   const K = S.taps;
   if (K <= 1) return 1.0;
-  const M  = S.mode === 'nyquist' ? 1 : S.mode === 'sigma_delta' ? 2 : 3;
+  const M  = filtOrder();
   const w  = 2 * Math.PI * S.freq * S.Ts;
   const sw = Math.sin(w / 2);
   if (Math.abs(sw) < 1e-9) return 1.0;
@@ -497,6 +545,7 @@ function filtGain() {
 }
 
 function filtOut(k) {
+  if (S.mode === 'leapfrog_cb') return cbEstimate(k);  // estimate IS the output
   if (S.taps <= 1) return rawOut(k);
   const h    = getFIR();
   const hSum = h.reduce((a, b) => a + b, 0);  // = K^M (DC gain)
@@ -506,6 +555,255 @@ function filtOut(k) {
   // so the in-band amplitude of the staircase matches the analog signal).
   // Reference: src/cicadc/manim_scene.py  _filt_level()
   return (acc / hSum) / filtGain();
+}
+
+// ─── Control-bounded leapfrog (discrete-time) ────────────────────────────────
+// The DT counterpart of the paper's leapfrog CBADC: every integrator has its
+// own local 1-bit control, and the input is recovered by a non-causal FIR
+// estimation filter (forward/backward Riccati solutions). Mirrors Python's
+// DiscreteLeapfrogCBADC + SignalChain CB mode in src/cicadc/.
+// CB-NUMERICS-BEGIN
+// DT system (b=0.4, a=0.004, kappa=0.8):  x[n+1] = Ad x + Bd u − 0.8·sign(x)
+const CB_Ad = [[1, -0.004, 0], [0.4, 1, -0.004], [0, 0.4, 1]];
+const CB_Bd = [0.4, 0, 0];
+const CB_KAPPA = 0.8;
+// CT-equivalent generator A = logm(Ad) and input matrices mapped through
+// M = ∫₀¹ expm(Aσ)dσ — precomputed by src/cicadc/control_bounded.py
+// DiscreteLeapfrogCBADC._equivalent_ct() so the browser needs no logm.
+const CB_Act = [
+  [ 7.9872272412952650e-04, -3.9957415066553701e-03, -7.9872272416014819e-06],
+  [ 3.9957415066552393e-01,  1.5974454482598978e-03, -3.9957415066554838e-03],
+  [-7.9872272412980255e-02,  3.9957415066552421e-01,  7.9872272412933785e-04]];
+const CB_Bct = [0.3997870753327621, -0.0798722724129799, 0.0212924667237821];
+const CB_Gct = [
+  [-7.9957415066552429e-01, -1.5974454482596411e-03, -4.2584933448778653e-06],
+  [ 1.5974454482595971e-01, -7.9914830133104853e-01, -1.5974454482596868e-03],
+  [-4.2584933447564179e-02,  1.5974454482595987e-01, -7.9957415066552473e-01]];
+const CB_K = 128;          // estimator half-length (taps each side of "now")
+const CB_WARMUP = 256;
+
+// --- small dense matrix helpers (3×3 rows-of-arrays, vectors length 3) ---
+const m3eye = () => [[1,0,0],[0,1,0],[0,0,1]];
+const m3T   = A => [[A[0][0],A[1][0],A[2][0]],[A[0][1],A[1][1],A[2][1]],[A[0][2],A[1][2],A[2][2]]];
+const m3add = (A,B) => A.map((r,i) => r.map((v,j) => v + B[i][j]));
+const m3sub = (A,B) => A.map((r,i) => r.map((v,j) => v - B[i][j]));
+const m3scale = (A,s) => A.map(r => r.map(v => v * s));
+const m3mul = (A,B) => A.map((r,i) => [0,1,2].map(j => r[0]*B[0][j] + r[1]*B[1][j] + r[2]*B[2][j]));
+const m3mulv = (A,v) => A.map(r => r[0]*v[0] + r[1]*v[1] + r[2]*v[2]);
+
+// Gaussian elimination with partial pivoting; A n×n, b n-vector (both copied).
+function gaussSolve(A, b) {
+  const n = b.length;
+  const M = A.map((r,i) => [...r, b[i]]);
+  for (let c = 0; c < n; c++) {
+    let p = c;
+    for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+    [M[c], M[p]] = [M[p], M[c]];
+    for (let r = c + 1; r < n; r++) {
+      const f = M[r][c] / M[c][c];
+      for (let j = c; j <= n; j++) M[r][j] -= f * M[c][j];
+    }
+  }
+  const x = new Array(n).fill(0);
+  for (let r = n - 1; r >= 0; r--) {
+    let s = M[r][n];
+    for (let j = r + 1; j < n; j++) s -= M[r][j] * x[j];
+    x[r] = s / M[r][r];
+  }
+  return x;
+}
+// Solve A X = B column-by-column (3×3).
+function m3solveMat(A, B) {
+  const cols = [0,1,2].map(j => gaussSolve(A, [B[0][j], B[1][j], B[2][j]]));
+  return [[cols[0][0],cols[1][0],cols[2][0]],[cols[0][1],cols[1][1],cols[2][1]],[cols[0][2],cols[1][2],cols[2][2]]];
+}
+
+// expm for 3×3 by scaling-and-squaring + Taylor.
+function m3expm(A) {
+  let norm = 0;
+  for (const r of A) norm = Math.max(norm, Math.abs(r[0]) + Math.abs(r[1]) + Math.abs(r[2]));
+  const s = Math.max(0, Math.ceil(Math.log2(Math.max(norm, 1e-16))) + 1);
+  const As = m3scale(A, 1 / Math.pow(2, s));
+  let E = m3eye(), term = m3eye();
+  for (let i = 1; i <= 16; i++) {
+    term = m3scale(m3mul(term, As), 1 / i);
+    E = m3add(E, term);
+  }
+  for (let i = 0; i < s; i++) E = m3mul(E, E);
+  return E;
+}
+
+// Lyapunov solve  Mᵀ X + X M + C = 0  via the 9×9 Kronecker system.
+function lyap3(M, C) {
+  const Mt = m3T(M);
+  const A9 = Array.from({length: 9}, () => new Array(9).fill(0));
+  const b9 = new Array(9).fill(0);
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
+    const r = i * 3 + j;
+    for (let k = 0; k < 3; k++) {
+      A9[r][k * 3 + j] += Mt[i][k];   // (Mᵀ X)_{ij}
+      A9[r][i * 3 + k] += M[k][j];    // (X M)_{ij}
+    }
+    b9[r] = -C[i][j];
+  }
+  const x = gaussSolve(A9, b9);
+  return [[x[0],x[1],x[2]],[x[3],x[4],x[5]],[x[6],x[7],x[8]]];
+}
+
+// CARE  A V + V Aᵀ − V V/eta2 + Q = 0  by Kleinman–Newton iteration
+// (control form with a = Aᵀ, b = I, R = eta2·I; K₀ = I is stabilizing since
+// the leapfrog A has eigenvalues with tiny real parts).
+function careSolve(A, Q, eta2) {
+  const At = m3T(A);
+  let K = m3eye(), X = null;
+  for (let it = 0; it < 60; it++) {
+    const M = m3sub(At, K);
+    const C = m3add(Q, m3scale(m3mul(m3T(K), K), eta2));
+    X = lyap3(M, C);
+    const Kn = m3scale(X, 1 / eta2);
+    let d = 0;
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++)
+      d = Math.max(d, Math.abs(Kn[i][j] - K[i][j]));
+    K = Kn;
+    if (d < 1e-13) break;
+  }
+  return X.map((r,i) => r.map((v,j) => 0.5 * (v + X[j][i])));  // symmetrize
+}
+
+// eta2 = |G(e^{jw})|² of the DT system at the estimator band edge w = π/osr_cb:
+// complex 3×3 solve of (z I − Ad) G = Bd.
+function cbEta2(osrCb) {
+  const w = Math.PI / osrCb;
+  const zr = Math.cos(w), zi = Math.sin(w);
+  // augmented complex elimination on [Re|Im] pairs
+  const n = 3;
+  const Ar = [], Ai = [], br = [...CB_Bd], bi = [0, 0, 0];
+  for (let i = 0; i < n; i++) {
+    Ar.push([0,1,2].map(j => (i === j ? zr : 0) - CB_Ad[i][j]));
+    Ai.push([0,1,2].map(j => (i === j ? zi : 0)));
+  }
+  for (let c = 0; c < n; c++) {
+    let p = c, pm = -1;
+    for (let r = c; r < n; r++) {
+      const m = Ar[r][c]*Ar[r][c] + Ai[r][c]*Ai[r][c];
+      if (m > pm) { pm = m; p = r; }
+    }
+    [Ar[c],Ar[p]] = [Ar[p],Ar[c]]; [Ai[c],Ai[p]] = [Ai[p],Ai[c]];
+    [br[c],br[p]] = [br[p],br[c]]; [bi[c],bi[p]] = [bi[p],bi[c]];
+    const d = Ar[c][c]*Ar[c][c] + Ai[c][c]*Ai[c][c];
+    for (let r = c + 1; r < n; r++) {
+      const fr = (Ar[r][c]*Ar[c][c] + Ai[r][c]*Ai[c][c]) / d;
+      const fi = (Ai[r][c]*Ar[c][c] - Ar[r][c]*Ai[c][c]) / d;
+      for (let j = c; j < n; j++) {
+        const ur = Ar[c][j], ui = Ai[c][j];
+        Ar[r][j] -= fr*ur - fi*ui;  Ai[r][j] -= fr*ui + fi*ur;
+      }
+      br[r] -= fr*br[c] - fi*bi[c];  bi[r] -= fr*bi[c] + fi*br[c];
+    }
+  }
+  const gr = [0,0,0], gi = [0,0,0];
+  for (let r = n - 1; r >= 0; r--) {
+    let sr = br[r], si = bi[r];
+    for (let j = r + 1; j < n; j++) {
+      sr -= Ar[r][j]*gr[j] - Ai[r][j]*gi[j];
+      si -= Ar[r][j]*gi[j] + Ai[r][j]*gr[j];
+    }
+    const d = Ar[r][r]*Ar[r][r] + Ai[r][r]*Ai[r][r];
+    gr[r] = (sr*Ar[r][r] + si*Ai[r][r]) / d;
+    gi[r] = (si*Ar[r][r] - sr*Ai[r][r]) / d;
+  }
+  return gr[0]*gr[0]+gi[0]*gi[0] + gr[1]*gr[1]+gi[1]*gi[1] + gr[2]*gr[2]+gi[2]*gi[2];
+}
+
+// FIR estimator taps (2·CB_K rows of 3), index CB_K is "now".
+// h[K−1−j] = −Wᵀ Af^j Bf (past block); h[K+k] = −Wᵀ Ab^k Bb (future block).
+// Reference: src/cicadc/control_bounded.py  control_bounded_taps()
+function cbComputeTaps(eta2) {
+  const A = CB_Act, G = CB_Gct, I = m3eye();
+  const Q = [0,1,2].map(i => [0,1,2].map(j => CB_Bct[i] * CB_Bct[j]));
+  const Vf = careSolve(A, Q, eta2);
+  const Vb = careSolve(m3scale(A, -1), Q, eta2);
+  const tAf = m3sub(A, m3scale(Vf, 1 / eta2));
+  const tAb = m3add(A, m3scale(Vb, 1 / eta2));
+  const Af = m3expm(tAf);
+  const Ab = m3expm(m3scale(tAb, -1));
+  const W  = gaussSolve(m3add(Vf, Vb), CB_Bct);
+  const Bf = m3solveMat(tAf, m3mul(m3sub(Af, I), G));
+  const Bb = m3scale(m3solveMat(tAb, m3mul(m3sub(Ab, I), G)), -1);
+  const AfT = m3T(Af), AbT = m3T(Ab), BfT = m3T(Bf), BbT = m3T(Bb);
+  const h = new Array(2 * CB_K);
+  let v = [...W];
+  for (let j = 0; j < CB_K; j++) {
+    h[CB_K - 1 - j] = m3mulv(BfT, v).map(x => -x);
+    v = m3mulv(AfT, v);
+  }
+  v = [...W];
+  for (let k = 0; k < CB_K; k++) {
+    h[CB_K + k] = m3mulv(BbT, v).map(x => -x);
+    v = m3mulv(AbT, v);
+  }
+  return h;
+}
+// CB-NUMERICS-END
+
+// --- CB caches: control state per sample index, estimates, taps per OSR ---
+let cbState = new Map(), cbEst = new Map(), cbCMin = null, cbCMax = null;
+let cbTaps = null, cbTapsKey = '';
+
+// Estimator taps tuned to half the live oversampling ratio so the signal sits
+// inside the reconstruction band (unity gain), capped at osr_cb=25 beyond
+// which the narrow-band estimator design degrades.
+function cbTapsFor() {
+  const osrVis = 0.5 / Math.max(S.freq * S.Ts, 1e-9);
+  const osrCb = Math.min(Math.max(osrVis / 2, 2), 25);
+  const key = osrCb.toFixed(2);
+  if (cbTaps && key === cbTapsKey) return cbTaps;
+  cbTaps = cbComputeTaps(cbEta2(osrCb));
+  cbTapsKey = key;
+  cbEst.clear();
+  return cbTaps;
+}
+
+// Ensure the integrator state x[k] is cached for k in [ka, kb] (forward
+// recursion; cold start warms up CB_WARMUP samples earlier).
+function cbFill(ka, kb) {
+  const step = (x, n) => {
+    const u = smpVal(n);
+    const s0 = x[0] >= 0 ? 1 : -1, s1 = x[1] >= 0 ? 1 : -1, s2 = x[2] >= 0 ? 1 : -1;
+    return [
+      x[0] - 0.004 * x[1]              + 0.4 * u - CB_KAPPA * s0,
+      0.4 * x[0] + x[1] - 0.004 * x[2]           - CB_KAPPA * s1,
+      0.4 * x[1] + x[2]                          - CB_KAPPA * s2,
+    ];
+  };
+  if (cbCMax === null || ka > cbCMax + 1 || ka < cbCMin) {
+    cbState.clear(); cbEst.clear();
+    let c = ka - CB_WARMUP, x = [0, 0, 0];
+    cbState.set(c, x);
+    for (let n = c; n < kb; n++) { x = step(x, n); cbState.set(n + 1, x); }
+    cbCMin = c; cbCMax = kb;
+  } else if (kb > cbCMax) {
+    let x = cbState.get(cbCMax);
+    for (let n = cbCMax; n < kb; n++) { x = step(x, n); cbState.set(n + 1, x); }
+    cbCMax = kb;
+  }
+  if (cbCMax - cbCMin > 40000) { cbCMin = cbCMax = null; }  // bound the cache
+}
+
+// Reconstructed input estimate u_hat[k]: correlate the 2·CB_K window of
+// control bits (sign of each integrator state) with the estimator taps.
+function cbEstimate(k) {
+  const hit = cbEst.get(k);
+  if (hit !== undefined) return hit;
+  const taps = cbTapsFor();
+  cbFill(k - CB_K, k + CB_K);
+  let acc = 0;
+  for (let j = 0; j < 2 * CB_K; j++) {
+    const x = cbState.get(k - CB_K + j), t = taps[j];
+    acc += (x[0] >= 0 ? t[0] : -t[0]) + (x[1] >= 0 ? t[1] : -t[1]) + (x[2] >= 0 ? t[2] : -t[2]);
+  }
+  cbEst.set(k, acc);
+  return acc;
 }
 
 // ─── FFT (Cooley-Tukey radix-2, in-place) ────────────────────────────────────
@@ -800,14 +1098,17 @@ function holdStaircase(p, levelFn, half, delay) {
 
 // ─── Digital panel ────────────────────────────────────────────────────────────
 function drawDigital() {
-  const label = {nyquist:'NYQUIST', sigma_delta:'ΣΔ 1ST ORDER', sigma_delta2:'ΣΔ 2ND ORDER'}[S.mode];
+  const label = {nyquist:'NYQUIST', sigma_delta:'ΣΔ 1ST ORDER', sigma_delta2:'ΣΔ 2ND ORDER',
+                 leapfrog:'LEAPFROG 3RD', leapfrog_cb:'LEAPFROG CB'}[S.mode];
   panelBg(RP);
   panelLabels(RP, `DIGITAL OUTPUT — ${label}`, '#cdd6e6');
   cx.save(); clip(RP);
   panelGrid(RP);
 
   const half  = S.win / 2;
-  const K     = Math.max(1, S.taps);
+  // For the control-bounded mode the estimate IS the only output (no separate
+  // coarse trace), so take the single-staircase path regardless of the slider.
+  const K     = S.mode === 'leapfrog_cb' ? 1 : Math.max(1, S.taps);
   const delay = groupDelay();
 
   // Reference: src/cicadc/manim_scene.py  _dynamic_right()
@@ -1008,7 +1309,9 @@ window.addEventListener('resize', resizeCanvas);
 
 // ─── Control handlers ─────────────────────────────────────────────────────────
 function invalidateSD() {
-  c1.clear(); c2.clear(); cKey = '';
+  c1.clear(); c2.clear(); c3.clear(); cKey = '';
+  cbState.clear(); cbEst.clear(); cbCMin = cbCMax = null;
+  cbTaps = null; cbTapsKey = '';
   firH = null; firKey = '';
   stfCache = null; stfPhase = 0; stfKey = '';
   resetFFTBuf();
@@ -1046,10 +1349,23 @@ function setDither(on) {
 }
 function setMode(m) {
   S.mode = m;
-  ['nyq','sd1','sd2'].forEach(id => document.getElementById('btn-'+id).classList.remove('on'));
-  document.getElementById('btn-'+{nyquist:'nyq',sigma_delta:'sd1',sigma_delta2:'sd2'}[m]).classList.add('on');
+  ['nyq','sd1','sd2','lf','cb'].forEach(id => document.getElementById('btn-'+id).classList.remove('on'));
+  document.getElementById('btn-'+{nyquist:'nyq',sigma_delta:'sd1',sigma_delta2:'sd2',
+                                  leapfrog:'lf',leapfrog_cb:'cb'}[m]).classList.add('on');
   document.getElementById('cb-adc').textContent =
-    {nyquist:'NYQUIST ADC', sigma_delta:'ΣΔ 1ST ORDER', sigma_delta2:'ΣΔ 2ND ORDER'}[m];
+    {nyquist:'NYQUIST ADC', sigma_delta:'ΣΔ 1ST ORDER', sigma_delta2:'ΣΔ 2ND ORDER',
+     leapfrog:'LEAPFROG 3RD', leapfrog_cb:'LEAPFROG CB'}[m];
+  // The control-bounded leapfrog only reconstructs at high oversampling: drop
+  // the signal frequency to put it around OSR ~20 when it is selected.
+  if (m === 'leapfrog_cb') {
+    const fTarget = Math.max(0.1, 0.5 / (20 * S.Ts));
+    if (S.freq > fTarget) {
+      S.freq = fTarget;
+      const sl = document.getElementById('sl-freq');
+      sl.value = fTarget;
+      document.getElementById('v-freq').textContent = fTarget.toFixed(2) + ' Hz';
+    }
+  }
   invalidateSD();
   updateFilterInfo();
 }
@@ -1061,12 +1377,20 @@ function togglePause() {
 }
 function updateFilterInfo() {
   const K = S.taps;
-  const M = S.mode === 'nyquist' ? 1 : S.mode === 'sigma_delta' ? 2 : 3;
-  document.getElementById('filter-info').textContent =
-    S.mode === 'nyquist' ? 'no filter active'
-                         : `sinc${M}, K=${K}, FIR len=${M*(K-1)+1}`;
-  document.getElementById('cb-filter').classList.toggle('on', S.mode !== 'nyquist' && K > 1);
-  document.getElementById('cb-filter').textContent = `FILTER ×${K}`;
+  const M = filtOrder();
+  const info = document.getElementById('filter-info');
+  const cbF  = document.getElementById('cb-filter');
+  if (S.mode === 'leapfrog_cb') {
+    info.textContent = `estimator FIR, 2×${CB_K} taps — K unused`;
+    cbF.classList.add('on');
+    cbF.textContent = 'ESTIMATOR';
+  } else {
+    info.textContent = S.mode === 'nyquist'
+      ? 'no filter active'
+      : `sinc${M}, K=${K}, FIR len=${M*(K-1)+1}`;
+    cbF.classList.toggle('on', S.mode !== 'nyquist' && K > 1);
+    cbF.textContent = `FILTER ×${K}`;
+  }
 }
 document.getElementById('sl-noise').addEventListener('input', function() {
   document.getElementById('cb-noise').classList.toggle('on', +this.value > 0);
@@ -1214,11 +1538,28 @@ document.getElementById('sl-noise').addEventListener('input', function() {
     <tr><th>Order</th><th>Noise shaping</th><th>In-band noise reduction per octave of OSR</th><th>Typical use</th></tr>
     <tr><td>1st</td><td>(1 − z⁻¹)</td><td>9 dB</td><td>Simple, always stable</td></tr>
     <tr><td>2nd</td><td>(1 − z⁻¹)²</td><td>15 dB</td><td>Excellent SNR, needs careful design</td></tr>
+    <tr><td>3rd (LF)</td><td>(1 − z⁻¹)³ + spread zeros</td><td>21 dB</td><td>Leapfrog ladder, tuned coefficients</td></tr>
   </table>
   <p>
     The decimation filter is a sinc<sup>M</sup> cascade (M = modulator order + 1), matched to the
     noise shaping to maximise stop-band rejection. A higher oversampling ratio K also helps: each
     doubling of K reduces in-band noise by an extra 3 dB beyond the shaping benefit.
+  </p>
+
+  <h3>Leapfrog and control-bounded modes</h3>
+  <p>
+    The <em>LF 3rd</em> button selects a 3rd-order single-loop <strong>leapfrog</strong>
+    modulator: a chain of three integrators with a resonator cross-coupling that moves a pair
+    of noise-transfer-function zeros off DC into the signal band, flattening the in-band noise
+    floor. It is reconstructed by the usual sinc<sup>4</sup> decimation filter.
+  </p>
+  <p>
+    The <em>LF CB</em> button selects the <strong>control-bounded</strong> leapfrog: instead of
+    one quantizer in a loop, <em>every</em> integrator carries its own local 1-bit control —
+    which is what guarantees the loop stays bounded — and the input is recovered by a digital
+    <em>estimation filter</em> whose taps come from forward/backward Riccati equations. There is
+    no sinc decimator and no group delay: the estimator is centred on "now". It needs heavy
+    oversampling, so selecting it automatically lowers the signal frequency.
   </p>
 
   <h2>STATE-SPACE FORMULATION</h2>

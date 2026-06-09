@@ -133,11 +133,13 @@ class SignalChain:
 
         The estimator bandwidth is set to half the live oversampling ratio so the
         signal sits comfortably inside the reconstruction band (unity in-band
-        gain) rather than at its edge (which would roll off ~6 dB).
+        gain) rather than at its edge (which would roll off ~6 dB). Capped at
+        25: beyond that the very narrow-band estimator design degrades (the
+        reconstruction amplitude collapses), measured by simulation.
         """
         osr = round(self.osr(), 2)
         if self._cb_taps is None or self._cb_taps_osr != osr:
-            self._cb.osr = max(osr / 2.0, 2.0)
+            self._cb.osr = min(max(osr / 2.0, 2.0), 25.0)
             self._cb_taps = self._cb.estimator_taps(K1=self._cb_K, K2=self._cb_K)
             self._cb_taps_osr = osr
         return self._cb_taps
