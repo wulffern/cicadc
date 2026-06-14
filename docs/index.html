@@ -807,6 +807,15 @@ function cbBits(k) {
   return [x[0] >= 0 ? 1 : -1, x[1] >= 0 ? 1 : -1, x[2] >= 0 ? 1 : -1];
 }
 
+// Pre-quantizer integrator state x_l[k] (the analog value seen by comparator l).
+// x1 accumulates (u − κ s1), x2 accumulates (x1 − κ s2), x3 accumulates (x2 − κ s3):
+// each is a chain of errors, analogous to ΣΔ integrator states.
+function cbPreQ(k, l) {
+  cbFill(k, k);
+  const x = cbState.get(k);
+  return x ? x[l] : 0;
+}
+
 // Reconstructed input estimate u_hat[k]: correlate the 2·CB_K window of
 // control bits (sign of each integrator state) with the estimator taps.
 function cbEstimate(k) {
@@ -1149,6 +1158,11 @@ function drawDigital() {
       const fSub = Math.max(7, Math.round(10 * pxf));
       cx.fillStyle = cols[l]; cx.font = `bold ${fSub}px monospace`; cx.textAlign = 'center';
       cx.fillText('s' + (l + 1), pcx(sp), sp.y0 + Math.round(14 * pxf));
+      // Pre-quantizer integrator state x_l (thin faint trace) — each x_l
+      // accumulates the chain of errors above it, analogous to a ΣΔ integrator.
+      // The states are naturally bounded to roughly ±κ=0.8 by the controller.
+      cx.strokeStyle = cols[l].replace('0.9)', '0.35)'); cx.lineWidth = Math.max(0.8, 1.5 * pxf);
+      holdStaircase(sp, k => cbPreQ(k, l), half, 0);
       // ±1 staircase spanning the full sub-panel width
       cx.strokeStyle = cols[l]; cx.lineWidth = Math.max(1.3, 2.5 * pxf);
       holdStaircase(sp, k => cbBits(k)[l], half, 0);
