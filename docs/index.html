@@ -366,52 +366,52 @@ function sigAt(t) {
   return cleanSig(t) + (S.blocker ? blockerSig(t) : 0) + noiseAt(t);
 }
 
-// ─── Analog pre-filter (2nd-order Butterworth biquad, bilinear transform) ────
-// fcutoff is fraction of Nyquist (0..1); ω0 = π·fcutoff rad/sample.
-// LP/HP use Q=1/√2 (Butterworth); BP uses Q=2.
-let fInCache = new Map(), fInKey = '';
-function biquadCoeffs() {
-  const w0 = Math.PI * S.fcutoff;
-  const cw = Math.cos(w0), sw = Math.sin(w0);
-  const Q  = S.ftype === 'bp' ? 2.0 : Math.SQRT2 / 2;
-  const a  = sw / (2 * Q), a0i = 1 / (1 + a);
-  const a1c = -2 * cw * a0i, a2c = (1 - a) * a0i;
+// ─── Analog pre-filter (2nd-order Butterworth, continuous-time) ──────────────
+// Modelled as a true analog filter: computes the exact gain + phase at each
+// sinusoidal frequency so blockers above Nyquist are rejected before sampling
+// (no aliasing artefacts). fcutoff is fraction of Nyquist; cutoff_Hz = fcutoff/2/Ts.
+// LP/HP: 2nd-order Butterworth  |H|²=1/(1+x⁴) where x=f/fc.
+// BP: 2nd-order resonator, Q=2. Returns [magnitude, phase_rad].
+function analogFilter(fHz) {
+  const fcHz = S.fcutoff * 0.5 / S.Ts;
+  const x = Math.abs(fHz) / Math.max(fcHz, 1e-9);
+  const x2 = x * x;
   if (S.ftype === 'lp') {
-    const b = (1 - cw) * a0i;
-    return { b0: b/2, b1: b, b2: b/2, a1: a1c, a2: a2c };
+    const dr = 1 - x2, di = Math.SQRT2 * x;
+    const dm = Math.sqrt(dr*dr + di*di);
+    return [1 / dm, -Math.atan2(di, dr)];
   } else if (S.ftype === 'hp') {
-    const b = (1 + cw) * a0i;
-    return { b0: b/2, b1: -b, b2: b/2, a1: a1c, a2: a2c };
-  } else {  // bp
-    const b = sw / 2 * a0i;
-    return { b0: b, b1: 0, b2: -b, a1: a1c, a2: a2c };
+    const dr = 1 - x2, di = Math.SQRT2 * x;
+    const dm = Math.sqrt(dr*dr + di*di);
+    return [x2 / dm, Math.PI - Math.atan2(di, dr)];
   }
+  // bp, Q=2: H(jω) = j(x/Q)/((1-x²)+j(x/Q))
+  const dr = 1 - x2, di = x / 2;
+  const dm = Math.sqrt(dr*dr + di*di);
+  return [di / dm, Math.PI/2 - Math.atan2(di, dr)];
 }
-// adcIn(k): pre-filter output — the signal that actually enters the ADC.
-// Cached as [x[k], x[k-1], y[k], y[k-1]].
-function adcIn(k) {
-  if (S.ftype === 'none') return sigAt(k * S.Ts);
-  const key = `${S.freq}|${S.amp}|${S.freq2}|${S.amp2}|${S.blocker}|${S.ftype}|${S.fcutoff}|${S.Ts}|${S.noise}`;
-  if (key !== fInKey) { fInCache.clear(); fInKey = key; }
-  const hit = fInCache.get(k);
-  if (hit) return hit[2];
-  const prev = fInCache.get(k - 1);
-  if (prev) {
-    const c = biquadCoeffs(), x = sigAt(k * S.Ts);
-    const y = c.b0*x + c.b1*prev[0] + c.b2*prev[1] - c.a1*prev[2] - c.a2*prev[3];
-    fInCache.set(k, [x, prev[0], y, prev[2]]);
-    return y;
+// Continuous-time pre-filter output: exact for sinusoidal signals, no aliasing.
+function adcInCt(t) {
+  if (S.ftype === 'none') return sigAt(t);
+  const [mg_s, ph_s] = analogFilter(S.freq);
+  let out = S.amp * mg_s * Math.sin(2*Math.PI*S.freq*t + ph_s);
+  if (S.blocker) {
+    const [mg_b, ph_b] = analogFilter(S.freq2);
+    out -= S.amp2 * mg_b * Math.sin(2*Math.PI*S.freq2*t + ph_b);
   }
-  const c = biquadCoeffs();
-  let xp = 0, xpp = 0, yp = 0, ypp = 0;
-  for (let n = k - 256; n <= k; n++) {
-    const x = sigAt(n * S.Ts);
-    const y = c.b0*x + c.b1*xp + c.b2*xpp - c.a1*yp - c.a2*ypp;
-    fInCache.set(n, [x, xp, y, yp]);
-    xpp = xp; xp = x; ypp = yp; yp = y;
-  }
-  return fInCache.get(k)[2];
+  return out + noiseAt(t);
 }
+function adcInCtDeriv(t) {
+  if (S.ftype === 'none') return cleanSigDeriv(t) + (S.blocker ? blockerSigDeriv(t) : 0);
+  const [mg_s, ph_s] = analogFilter(S.freq);
+  let out = S.amp * mg_s * 2*Math.PI*S.freq * Math.cos(2*Math.PI*S.freq*t + ph_s);
+  if (S.blocker) {
+    const [mg_b, ph_b] = analogFilter(S.freq2);
+    out -= S.amp2 * mg_b * 2*Math.PI*S.freq2 * Math.cos(2*Math.PI*S.freq2*t + ph_b);
+  }
+  return out;
+}
+function adcIn(k) { return adcInCt(k * S.Ts); }
 function smpVal(k) { return adcIn(k); }
 
 // ─── Nyquist mid-tread quantiser ──────────────────────────────────────────────
@@ -1219,27 +1219,18 @@ function drawAnalog() {
 
   // Lilac curve + car: post-filter analog (adcIn), shown when filter or blocker is active
   if (S.blocker || S.ftype !== 'none') {
-    // Pre-fill cache for the visible window so interpolation is cheap
-    const k0c = Math.floor((S.t - half) / S.Ts) - 1;
-    const k1c = Math.ceil( (S.t + half) / S.Ts) + 2;
-    for (let k = k0c; k <= k1c; k++) adcIn(k);
-    const adcInAt = t => {
-      const k = Math.floor(t / S.Ts), fr = (t - k * S.Ts) / S.Ts;
-      return adcIn(k) + fr * (adcIn(k + 1) - adcIn(k));
-    };
     cx.strokeStyle = '#9b6ec8'; cx.lineWidth = Math.max(1, 2 * pxf);
     cx.beginPath();
     for (let i = 0, N = 400; i <= N; i++) {
       const tr = -half + i * S.win / N;
       i === 0
-        ? cx.moveTo(vX(LP, adcInAt(S.t + tr)), tY(LP, tr))
-        : cx.lineTo(vX(LP, adcInAt(S.t + tr)), tY(LP, tr));
+        ? cx.moveTo(vX(LP, adcInCt(S.t + tr)), tY(LP, tr))
+        : cx.lineTo(vX(LP, adcInCt(S.t + tr)), tY(LP, tr));
     }
     cx.stroke();
-    const kN  = Math.floor(S.t / S.Ts);
-    const dvdt = (adcIn(kN + 1) - adcIn(kN - 1)) / (2 * S.Ts);
+    const dvdt = adcInCtDeriv(S.t);
     const angL = Math.atan2(-ph(LP) / S.win, (pw(LP) * 0.4 / S.vref) * dvdt) + Math.PI / 2;
-    drawCar(vX(LP, adcIn(kN)), yNow, angL, 'lilac', 1.0);
+    drawCar(vX(LP, adcInCt(S.t)), yNow, angL, 'lilac', 1.0);
   }
 
   cx.restore();
@@ -1544,7 +1535,6 @@ function invalidateSD() {
   cbTaps = null; cbTapsKey = '';
   firH = null; firKey = '';
   stfCache = null; stfPhase = 0; stfKey = '';
-  fInCache.clear(); fInKey = '';
   resetFFTBuf();
 }
 
