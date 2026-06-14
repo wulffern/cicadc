@@ -116,6 +116,7 @@ canvas {
 <div id="chain">
   <div class="cb on">ANALOG</div><span class="ca">→</span>
   <div class="cb" id="cb-noise">NOISE</div><span class="ca">→</span>
+  <div class="cb" id="cb-pfilt">PRE-FILTER</div><span class="ca">→</span>
   <div class="cb on" id="cb-adc">NYQUIST ADC</div><span class="ca">→</span>
   <div class="cb" id="cb-filter">FILTER ×1</div><span class="ca">→</span>
   <div class="cb on">DIGITAL</div>
@@ -197,6 +198,42 @@ canvas {
       <span id="filter-info">Nyquist: no filter</span>
     </div>
   </div>
+
+  <div class="cg">
+    <div class="cgt">BLOCKER</div>
+    <div class="ditrow">
+      <input type="checkbox" id="blkcb" onchange="setBlocker(this.checked)">
+      <label for="blkcb">Enable blocker</label>
+    </div>
+    <div class="cr">
+      <label>Frequency</label>
+      <input type="range" id="sl-freq2" min="0.1" max="5" step="0.05" value="0.3"
+             oninput="setFreq2(+this.value)">
+      <span class="v" id="v-freq2">0.30 Hz</span>
+    </div>
+    <div class="cr">
+      <label>Amplitude</label>
+      <input type="range" id="sl-amp2" min="0.05" max="1.0" step="0.01" value="0.4"
+             oninput="setAmp2(+this.value)">
+      <span class="v" id="v-amp2">0.40 FS</span>
+    </div>
+  </div>
+
+  <div class="cg">
+    <div class="cgt">PRE-FILTER</div>
+    <div class="moderow" style="grid-template-columns:repeat(4,1fr)">
+      <button class="modebtn on" id="btn-pf-none" onclick="setFtype('none')">None</button>
+      <button class="modebtn"   id="btn-pf-lp"   onclick="setFtype('lp')">LP</button>
+      <button class="modebtn"   id="btn-pf-bp"   onclick="setFtype('bp')">BP</button>
+      <button class="modebtn"   id="btn-pf-hp"   onclick="setFtype('hp')">HP</button>
+    </div>
+    <div class="cr">
+      <label>Cutoff/Center</label>
+      <input type="range" id="sl-fc" min="0.02" max="0.48" step="0.01" value="0.15"
+             oninput="setFcutoff(+this.value)">
+      <span class="v" id="v-fc">0.15 Nyq</span>
+    </div>
+  </div>
 </div>
 
 <div id="legend">
@@ -206,6 +243,7 @@ canvas {
   <div class="leg"><div class="lsw" style="background:#cdd6e6"></div>Filtered digital</div>
   <div class="leg"><div class="lsw" style="background:#ff4444"></div>Quant. error</div>
   <div class="leg"><div class="lsw" style="background:#39ff14"></div>FFT signal bin</div>
+  <div class="leg"><div class="lsw" style="background:#e63333"></div>Blocker signal</div>
 </div>
 
 <script>
@@ -292,6 +330,11 @@ const S = {
   paused: false,
   vref:   1.0,
   win:    4.0,   // total visible window = ±win/2 around "now"
+  freq2:   0.3,    // blocker frequency (Hz)
+  amp2:    0.4,    // blocker amplitude (fraction of FS)
+  blocker: false,  // blocker enabled
+  ftype:   'none', // pre-ADC analog filter: 'none'|'lp'|'bp'|'hp'
+  fcutoff: 0.15,   // filter cutoff/center as fraction of Nyquist (0..1)
 };
 
 // ─── Signal ───────────────────────────────────────────────────────────────────
@@ -312,8 +355,63 @@ function noiseAt(t) {
   const fs = f * f * (3 - 2 * f);  // smoothstep
   return S.noise * (noiseHash(i0) * (1 - fs) + noiseHash(i0 + 1) * fs);
 }
-function sigAt(t)  { return cleanSig(t) + noiseAt(t); }
-function smpVal(k) { return sigAt(k * S.Ts); }
+function blockerSig(t) {
+  return S.amp2 * Math.sin(2 * Math.PI * S.freq2 * t);
+}
+function blockerSigDeriv(t) {
+  return S.amp2 * 2 * Math.PI * S.freq2 * Math.cos(2 * Math.PI * S.freq2 * t);
+}
+function sigAt(t) {
+  return cleanSig(t) + (S.blocker ? blockerSig(t) : 0) + noiseAt(t);
+}
+
+// ─── Analog pre-filter (2nd-order Butterworth biquad, bilinear transform) ────
+// fcutoff is fraction of Nyquist (0..1); ω0 = π·fcutoff rad/sample.
+// LP/HP use Q=1/√2 (Butterworth); BP uses Q=2.
+let fInCache = new Map(), fInKey = '';
+function biquadCoeffs() {
+  const w0 = Math.PI * S.fcutoff;
+  const cw = Math.cos(w0), sw = Math.sin(w0);
+  const Q  = S.ftype === 'bp' ? 2.0 : Math.SQRT2 / 2;
+  const a  = sw / (2 * Q), a0i = 1 / (1 + a);
+  const a1c = -2 * cw * a0i, a2c = (1 - a) * a0i;
+  if (S.ftype === 'lp') {
+    const b = (1 - cw) * a0i;
+    return { b0: b/2, b1: b, b2: b/2, a1: a1c, a2: a2c };
+  } else if (S.ftype === 'hp') {
+    const b = (1 + cw) * a0i;
+    return { b0: b/2, b1: -b, b2: b/2, a1: a1c, a2: a2c };
+  } else {  // bp
+    const b = sw / 2 * a0i;
+    return { b0: b, b1: 0, b2: -b, a1: a1c, a2: a2c };
+  }
+}
+// adcIn(k): pre-filter output — the signal that actually enters the ADC.
+// Cached as [x[k], x[k-1], y[k], y[k-1]].
+function adcIn(k) {
+  if (S.ftype === 'none') return sigAt(k * S.Ts);
+  const key = `${S.freq}|${S.amp}|${S.freq2}|${S.amp2}|${S.blocker}|${S.ftype}|${S.fcutoff}|${S.Ts}|${S.noise}`;
+  if (key !== fInKey) { fInCache.clear(); fInKey = key; }
+  const hit = fInCache.get(k);
+  if (hit) return hit[2];
+  const prev = fInCache.get(k - 1);
+  if (prev) {
+    const c = biquadCoeffs(), x = sigAt(k * S.Ts);
+    const y = c.b0*x + c.b1*prev[0] + c.b2*prev[1] - c.a1*prev[2] - c.a2*prev[3];
+    fInCache.set(k, [x, prev[0], y, prev[2]]);
+    return y;
+  }
+  const c = biquadCoeffs();
+  let xp = 0, xpp = 0, yp = 0, ypp = 0;
+  for (let n = k - 256; n <= k; n++) {
+    const x = sigAt(n * S.Ts);
+    const y = c.b0*x + c.b1*xp + c.b2*xpp - c.a1*yp - c.a2*ypp;
+    fInCache.set(n, [x, xp, y, yp]);
+    xpp = xp; xp = x; ypp = yp; yp = y;
+  }
+  return fInCache.get(k)[2];
+}
+function smpVal(k) { return adcIn(k); }
 
 // ─── Nyquist mid-tread quantiser ──────────────────────────────────────────────
 // Levels at centres of 2**bits equal-width bins in [-vref, +vref].
@@ -345,7 +443,7 @@ function sdQ(v, k) {
 let c1 = new Map(), c2 = new Map(), c3 = new Map(), cKey = '';
 
 function sdCacheKey() {
-  return `${S.bits}|${S.dither}|${S.freq}|${S.amp}|${S.Ts}|${S.noise}`;
+  return `${S.bits}|${S.dither}|${S.freq}|${S.amp}|${S.Ts}|${S.noise}|${S.freq2}|${S.amp2}|${S.blocker}|${S.ftype}|${S.fcutoff}`;
 }
 function checkCache() {
   const k = sdCacheKey();
@@ -942,6 +1040,7 @@ let carReady = false;
         blue:  [0.45, 0.65, 2.00],   // boost: lum*2 on B channel → vibrant blue
         green: [0.35, 2.00, 0.35],   // boost: lum*2 on G channel → vibrant green
         gray:  [1.30, 1.40, 1.60],   // boost: all channels → bright cool gray
+        red:   [2.50, 0.35, 0.35],
       };
       for (const [name, [tr, tg, tb]] of Object.entries(variants)) {
         const copy = new Uint8ClampedArray(px);   // fresh copy each time
@@ -978,7 +1077,7 @@ function drawCar(x, y, angle, variant, alpha) {
     cx.drawImage(carSprites[variant], -s, -s, drawSize, drawSize);
   } else {
     // Triangle: vertex at top → points up at angle=0
-    const col = {blue:'#3361e6', green:'#b6e3b6', gray:'#cdd6e6'}[variant] || '#cdd6e6';
+    const col = {blue:'#3361e6', green:'#b6e3b6', gray:'#cdd6e6', red:'#e63333'}[variant] || '#cdd6e6';
     cx.fillStyle = col;
     const h = drawSize * 0.5, w = drawSize * 0.38;
     cx.beginPath();
@@ -1065,6 +1164,19 @@ function drawAnalog() {
   }
   cx.stroke();
 
+  // Blocker curve (red), drawn separately so it doesn't overlap the main signal legend
+  if (S.blocker) {
+    cx.strokeStyle = '#e63333'; cx.lineWidth = Math.max(1, 2 * pxf);
+    cx.beginPath();
+    for (let i = 0, N = 400; i <= N; i++) {
+      const tr = -half + i * S.win / N;
+      i === 0
+        ? cx.moveTo(vX(LP, blockerSig(S.t + tr)), tY(LP, tr))
+        : cx.lineTo(vX(LP, blockerSig(S.t + tr)), tY(LP, tr));
+    }
+    cx.stroke();
+  }
+
   // Sample dots and raw-ADC shadows
   const k0 = Math.ceil( (S.t - half) / S.Ts);
   const k1 = Math.floor((S.t + half) / S.Ts);
@@ -1096,6 +1208,16 @@ function drawAnalog() {
   }
   // Blue car: clean analog value at "now"
   drawCar(vX(LP, cleanSig(S.t)), yNow, ang, 'blue', 1.0);
+
+  // Red car: blocker position at "now"
+  if (S.blocker) {
+    const angB = (function(tRel) {
+      const dydt = -ph(LP) / S.win;
+      const dxdt = (pw(LP) * 0.4 / S.vref) * blockerSigDeriv(S.t + tRel);
+      return Math.atan2(dydt, dxdt) + Math.PI / 2;
+    })(0);
+    drawCar(vX(LP, blockerSig(S.t)), yNow, angB, 'red', 1.0);
+  }
 
   cx.restore();
 }
@@ -1382,6 +1504,7 @@ function invalidateSD() {
   cbTaps = null; cbTapsKey = '';
   firH = null; firKey = '';
   stfCache = null; stfPhase = 0; stfKey = '';
+  fInCache.clear(); fInKey = '';
   resetFFTBuf();
 }
 
@@ -1460,8 +1583,35 @@ function updateFilterInfo() {
     cbF.textContent = `FILTER ×${K}`;
   }
 }
+function setBlocker(on) {
+  S.blocker = on;
+  document.getElementById('cb-noise').classList.toggle('on', S.noise > 0 || on);
+  invalidateSD();
+}
+function setFreq2(v) {
+  S.freq2 = v;
+  document.getElementById('v-freq2').textContent = v.toFixed(2) + ' Hz';
+  if (S.blocker) invalidateSD();
+}
+function setAmp2(v) {
+  S.amp2 = v;
+  document.getElementById('v-amp2').textContent = v.toFixed(2) + ' FS';
+  if (S.blocker) invalidateSD();
+}
+function setFtype(t) {
+  S.ftype = t;
+  ['none','lp','bp','hp'].forEach(id => document.getElementById('btn-pf-'+id).classList.remove('on'));
+  document.getElementById('btn-pf-'+t).classList.add('on');
+  document.getElementById('cb-pfilt').classList.toggle('on', t !== 'none');
+  invalidateSD();
+}
+function setFcutoff(v) {
+  S.fcutoff = v;
+  document.getElementById('v-fc').textContent = v.toFixed(2) + ' Nyq';
+  if (S.ftype !== 'none') invalidateSD();
+}
 document.getElementById('sl-noise').addEventListener('input', function() {
-  document.getElementById('cb-noise').classList.toggle('on', +this.value > 0);
+  document.getElementById('cb-noise').classList.toggle('on', +this.value > 0 || S.blocker);
 });
 </script>
 
