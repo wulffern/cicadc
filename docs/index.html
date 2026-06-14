@@ -243,7 +243,8 @@ canvas {
   <div class="leg"><div class="lsw" style="background:#cdd6e6"></div>Filtered digital</div>
   <div class="leg"><div class="lsw" style="background:#ff4444"></div>Quant. error</div>
   <div class="leg"><div class="lsw" style="background:#39ff14"></div>FFT signal bin</div>
-  <div class="leg"><div class="lsw" style="background:#e63333"></div>Blocker signal</div>
+  <div class="leg"><div class="lsw" style="background:#e63333"></div>Blocker / FFT blocker bin</div>
+  <div class="leg"><div class="lsw" style="background:#9b6ec8"></div>FFT analog input</div>
 </div>
 
 <script>
@@ -934,9 +935,48 @@ function cbEstimate(k) {
 const FFT_N = 512;
 const fftBuf = new Float32Array(FFT_N);
 let fftHead = 0, fftLastK = -1, fftMag = null;
+const fftBufAna = new Float32Array(FFT_N);
+let fftHeadAna = 0, fftMagAna = null;
 
 function resetFFTBuf() {
   fftBuf.fill(0); fftHead = 0; fftLastK = -1; fftMag = null;
+  fftBufAna.fill(0); fftHeadAna = 0; fftMagAna = null;
+}
+
+function computeFFTMag(buf, head) {
+  const re = new Array(FFT_N), im = new Array(FFT_N).fill(0);
+  for (let n = 0; n < FFT_N; n++) {
+    const w = 0.5 - 0.5 * Math.cos(2 * Math.PI * n / (FFT_N - 1));
+    re[n] = buf[(head + n) % FFT_N] * w;
+  }
+  let j = 0;
+  for (let i = 1; i < FFT_N; i++) {
+    let bit = FFT_N >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { [re[i],re[j]]=[re[j],re[i]]; [im[i],im[j]]=[im[j],im[i]]; }
+  }
+  for (let len = 2; len <= FFT_N; len <<= 1) {
+    const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < FFT_N; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < (len >> 1); k++) {
+        const ur = re[i+k], ui = im[i+k];
+        const vr = re[i+k+(len>>1)]*cr - im[i+k+(len>>1)]*ci;
+        const vi = re[i+k+(len>>1)]*ci + im[i+k+(len>>1)]*cr;
+        re[i+k]           = ur+vr; im[i+k]           = ui+vi;
+        re[i+k+(len>>1)]  = ur-vr; im[i+k+(len>>1)]  = ui-vi;
+        const ncr = cr*wr - ci*wi; ci = cr*wi + ci*wr; cr = ncr;
+      }
+    }
+  }
+  const norm = FFT_N / 4, half = FFT_N >> 1;
+  const mag = new Float32Array(half);
+  for (let i = 0; i < half; i++) {
+    const m = Math.sqrt(re[i]*re[i] + im[i]*im[i]) / norm;
+    mag[i] = Math.max(-80, 20 * Math.log10(m + 1e-12));
+  }
+  return mag;
 }
 
 function updateFFT(kNow) {
@@ -945,55 +985,12 @@ function updateFFT(kNow) {
   for (let k = from; k <= kNow; k++) {
     fftBuf[fftHead % FFT_N] = filtOut(k);
     fftHead++;
+    fftBufAna[fftHeadAna % FFT_N] = adcIn(k);
+    fftHeadAna++;
   }
   fftLastK = kNow;
-
-  // Hann-windowed input from oldest (index fftHead % FFT_N) to newest
-  const re = new Array(FFT_N), im = new Array(FFT_N).fill(0);
-  for (let n = 0; n < FFT_N; n++) {
-    const w = 0.5 - 0.5 * Math.cos(2 * Math.PI * n / (FFT_N - 1));
-    re[n] = fftBuf[(fftHead + n) % FFT_N] * w;
-  }
-
-  // Bit-reversal permutation
-  let j = 0;
-  for (let i = 1; i < FFT_N; i++) {
-    let bit = FFT_N >> 1;
-    for (; j & bit; bit >>= 1) j ^= bit;
-    j ^= bit;
-    if (i < j) {
-      [re[i], re[j]] = [re[j], re[i]];
-      [im[i], im[j]] = [im[j], im[i]];
-    }
-  }
-  // Butterfly stages
-  for (let len = 2; len <= FFT_N; len <<= 1) {
-    const ang = -2 * Math.PI / len;
-    const wr = Math.cos(ang), wi = Math.sin(ang);
-    for (let i = 0; i < FFT_N; i += len) {
-      let cr = 1, ci = 0;
-      for (let k = 0; k < (len >> 1); k++) {
-        const ur = re[i+k], ui = im[i+k];
-        const vr = re[i+k+(len>>1)]*cr - im[i+k+(len>>1)]*ci;
-        const vi = re[i+k+(len>>1)]*ci + im[i+k+(len>>1)]*cr;
-        re[i+k]         = ur+vr; im[i+k]         = ui+vi;
-        re[i+k+(len>>1)] = ur-vr; im[i+k+(len>>1)] = ui-vi;
-        const ncr = cr*wr - ci*wi; ci = cr*wi + ci*wr; cr = ncr;
-      }
-    }
-  }
-
-  // Magnitude in dBFS.
-  // Hann coherent gain = 0.5, so a full-scale sinusoid (A=1) produces
-  // FFT bin magnitude = A * FFT_N/2 * 0.5 = FFT_N/4.
-  // Dividing by FFT_N/4 normalises 0 dBFS to a full-scale sine.
-  const norm = FFT_N / 4;
-  const half = FFT_N >> 1;
-  fftMag = new Float32Array(half);
-  for (let i = 0; i < half; i++) {
-    const m = Math.sqrt(re[i]*re[i] + im[i]*im[i]) / norm;
-    fftMag[i] = Math.max(-80, 20 * Math.log10(m + 1e-12));
-  }
+  fftMag    = computeFFTMag(fftBuf,    fftHead);
+  fftMagAna = computeFFTMag(fftBufAna, fftHeadAna);
 }
 
 // ─── Coordinate helpers ───────────────────────────────────────────────────────
@@ -1452,7 +1449,23 @@ function drawFFT() {
   }
   cx.fillText('Hz', p.x1 - Math.round(2*pxf), p.y1 + Math.round(11*pxf));
 
-  // Bars
+  // Analog input bars (lilac) — visible when blocker or pre-filter alters the input
+  if (fftMagAna && (S.blocker || S.ftype !== 'none')) {
+    for (let i = 1; i < FFT_N >> 1; i++) {
+      const f = i * fs / FFT_N;
+      if (f <= fMin || f > fNyq) continue;
+      const xFrac  = (Math.log10(f)            - lgMin) / lgR;
+      const xFnext = (Math.log10(f + fs/FFT_N) - lgMin) / lgR;
+      if (xFrac < 0 || xFrac > 1) continue;
+      const x1 = p.x0 + xFrac  * pw(p);
+      const x2 = p.x0 + Math.min(1, xFnext) * pw(p);
+      const bw = Math.max(1, x2 - x1);
+      const yFrac = Math.max(0, (fftMagAna[i] - floor) / -floor);
+      cx.fillStyle = '#9b6ec8';
+      cx.fillRect(x1, p.y1 - yFrac * ph(p), bw, yFrac * ph(p));
+    }
+  }
+  // Digital output bars (blue; signal bin green; blocker bin red)
   for (let i = 1; i < FFT_N >> 1; i++) {
     const f = i * fs / FFT_N;
     if (f <= fMin || f > fNyq) continue;
@@ -1463,8 +1476,9 @@ function drawFFT() {
     const x2 = p.x0 + Math.min(1, xFnext) * pw(p);
     const bw = Math.max(1, x2 - x1);
     const yFrac = Math.max(0, (fftMag[i] - floor) / -floor);
-    const isInput = Math.abs(f - S.freq) < fs / FFT_N * 2;
-    cx.fillStyle = isInput ? '#39ff14' : '#3b82f6';
+    const isInput   = Math.abs(f - S.freq)  < fs / FFT_N * 2;
+    const isBlocker = S.blocker && Math.abs(f - S.freq2) < fs / FFT_N * 2;
+    cx.fillStyle = isInput ? '#39ff14' : isBlocker ? '#e63333' : '#3b82f6';
     cx.fillRect(x1, p.y1 - yFrac * ph(p), bw, yFrac * ph(p));
   }
   cx.restore();
