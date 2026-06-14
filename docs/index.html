@@ -207,9 +207,9 @@ canvas {
     </div>
     <div class="cr">
       <label>Frequency</label>
-      <input type="range" id="sl-freq2" min="0.1" max="5" step="0.05" value="0.3"
+      <input type="range" id="sl-freq2" min="0.1" max="5" step="0.05" value="1.5"
              oninput="setFreq2(+this.value)">
-      <span class="v" id="v-freq2">0.30 Hz</span>
+      <span class="v" id="v-freq2">1.50 Hz</span>
     </div>
     <div class="cr">
       <label>Amplitude</label>
@@ -229,9 +229,9 @@ canvas {
     </div>
     <div class="cr">
       <label>Cutoff/Center</label>
-      <input type="range" id="sl-fc" min="0.02" max="0.48" step="0.01" value="0.15"
+      <input type="range" id="sl-fc" min="0.02" max="0.70" step="0.01" value="0.50"
              oninput="setFcutoff(+this.value)">
-      <span class="v" id="v-fc">0.15 Nyq</span>
+      <span class="v" id="v-fc">0.50 Nyq = 1.00 Hz</span>
     </div>
   </div>
 </div>
@@ -331,11 +331,11 @@ const S = {
   paused: false,
   vref:   1.0,
   win:    4.0,   // total visible window = ±win/2 around "now"
-  freq2:   0.3,    // blocker frequency (Hz)
+  freq2:   1.5,    // blocker frequency (Hz) — default above signal so LP is useful
   amp2:    0.4,    // blocker amplitude (fraction of FS)
   blocker: false,  // blocker enabled
   ftype:   'none', // pre-ADC analog filter: 'none'|'lp'|'bp'|'hp'
-  fcutoff: 0.15,   // filter cutoff/center as fraction of Nyquist (0..1)
+  fcutoff: 0.50,   // filter cutoff/center as fraction of Nyquist (0..1)
 };
 
 // ─── Signal ───────────────────────────────────────────────────────────────────
@@ -1565,6 +1565,7 @@ function setBits(v) {
 function setTs(v) {
   S.Ts = v;
   document.getElementById('v-ts').textContent = v.toFixed(2) + ' s';
+  document.getElementById('v-fc').textContent = fcutoffLabel(S.fcutoff, v);
   invalidateSD();
 }
 function setTaps(v) {
@@ -1645,9 +1646,12 @@ function setFtype(t) {
   document.getElementById('cb-pfilt').classList.toggle('on', t !== 'none');
   invalidateSD();
 }
+function fcutoffLabel(fc, Ts) {
+  return fc.toFixed(2) + ' Nyq = ' + (fc * 0.5 / Ts).toFixed(2) + ' Hz';
+}
 function setFcutoff(v) {
   S.fcutoff = v;
-  document.getElementById('v-fc').textContent = v.toFixed(2) + ' Nyq';
+  document.getElementById('v-fc').textContent = fcutoffLabel(v, S.Ts);
   if (S.ftype !== 'none') invalidateSD();
 }
 document.getElementById('sl-noise').addEventListener('input', function() {
