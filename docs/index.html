@@ -244,7 +244,7 @@ canvas {
   <div class="leg"><div class="lsw" style="background:#ff4444"></div>Quant. error</div>
   <div class="leg"><div class="lsw" style="background:#39ff14"></div>FFT signal bin</div>
   <div class="leg"><div class="lsw" style="background:#e63333"></div>Blocker / FFT blocker bin</div>
-  <div class="leg"><div class="lsw" style="background:#9b6ec8"></div>FFT analog input</div>
+  <div class="leg"><div class="lsw" style="background:#9b6ec8"></div>Post-filter / FFT analog input</div>
 </div>
 
 <script>
@@ -1038,6 +1038,7 @@ let carReady = false;
         green: [0.35, 2.00, 0.35],   // boost: lum*2 on G channel → vibrant green
         gray:  [1.30, 1.40, 1.60],   // boost: all channels → bright cool gray
         red:   [2.50, 0.35, 0.35],
+        lilac: [1.50, 0.75, 2.10],   // purple-lilac: strong B, moderate R, low G
       };
       for (const [name, [tr, tg, tb]] of Object.entries(variants)) {
         const copy = new Uint8ClampedArray(px);   // fresh copy each time
@@ -1074,7 +1075,7 @@ function drawCar(x, y, angle, variant, alpha) {
     cx.drawImage(carSprites[variant], -s, -s, drawSize, drawSize);
   } else {
     // Triangle: vertex at top → points up at angle=0
-    const col = {blue:'#3361e6', green:'#b6e3b6', gray:'#cdd6e6', red:'#e63333'}[variant] || '#cdd6e6';
+    const col = {blue:'#3361e6', green:'#b6e3b6', gray:'#cdd6e6', red:'#e63333', lilac:'#9b6ec8'}[variant] || '#cdd6e6';
     cx.fillStyle = col;
     const h = drawSize * 0.5, w = drawSize * 0.38;
     cx.beginPath();
@@ -1214,6 +1215,31 @@ function drawAnalog() {
       return Math.atan2(dydt, dxdt) + Math.PI / 2;
     })(0);
     drawCar(vX(LP, blockerSig(S.t)), yNow, angB, 'red', 1.0);
+  }
+
+  // Lilac curve + car: post-filter analog (adcIn), shown when filter or blocker is active
+  if (S.blocker || S.ftype !== 'none') {
+    // Pre-fill cache for the visible window so interpolation is cheap
+    const k0c = Math.floor((S.t - half) / S.Ts) - 1;
+    const k1c = Math.ceil( (S.t + half) / S.Ts) + 2;
+    for (let k = k0c; k <= k1c; k++) adcIn(k);
+    const adcInAt = t => {
+      const k = Math.floor(t / S.Ts), fr = (t - k * S.Ts) / S.Ts;
+      return adcIn(k) + fr * (adcIn(k + 1) - adcIn(k));
+    };
+    cx.strokeStyle = '#9b6ec8'; cx.lineWidth = Math.max(1, 2 * pxf);
+    cx.beginPath();
+    for (let i = 0, N = 400; i <= N; i++) {
+      const tr = -half + i * S.win / N;
+      i === 0
+        ? cx.moveTo(vX(LP, adcInAt(S.t + tr)), tY(LP, tr))
+        : cx.lineTo(vX(LP, adcInAt(S.t + tr)), tY(LP, tr));
+    }
+    cx.stroke();
+    const kN  = Math.floor(S.t / S.Ts);
+    const dvdt = (adcIn(kN + 1) - adcIn(kN - 1)) / (2 * S.Ts);
+    const angL = Math.atan2(-ph(LP) / S.win, (pw(LP) * 0.4 / S.vref) * dvdt) + Math.PI / 2;
+    drawCar(vX(LP, adcIn(kN)), yNow, angL, 'lilac', 1.0);
   }
 
   cx.restore();
