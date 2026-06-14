@@ -79,11 +79,16 @@ class ChainBar(QWidget):
         is_sd = sd_order > 0
         self._blocks["analog"].setText("ANALOG")
         self._blocks["noise"].setText("+ NOISE" if noise_on else "noise off")
-        order_sup = {1: "\u00b9", 2: "\u00b2"}.get(sd_order, "")
-        adc_text = f"\u03a3\u0394{order_sup} \u00b7 {bits} bit" if is_sd else f"ADC \u00b7 {bits} bit"
+        order_sup = {1: "\u00b9", 2: "\u00b2", 3: "\u00b3"}.get(sd_order, "")
+        if sd_order >= 3:  # leapfrog
+            adc_text = f"LF{order_sup} \u00b7 {bits} bit"
+        elif is_sd:
+            adc_text = f"\u03a3\u0394{order_sup} \u00b7 {bits} bit"
+        else:
+            adc_text = f"ADC \u00b7 {bits} bit"
         self._blocks["adc"].setText(adc_text)
         if is_sd:
-            decim_sup = {2: "\u00b2", 3: "\u00b3"}.get(sd_order + 1, "")
+            decim_sup = {2: "\u00b2", 3: "\u00b3", 4: "\u2074"}.get(sd_order + 1, "")
             on_text, off_text = f"sinc{decim_sup} \u00b7 {taps}", "decimate off"
         else:
             on_text, off_text = f"FILTER \u00b7 avg {taps}", "filter off"
@@ -176,6 +181,8 @@ class MainWindow(QWidget):
         self.adc_combo.addItem("Nyquist (uniform)", "nyquist")
         self.adc_combo.addItem("1st-order \u03a3\u0394", "sigma_delta")
         self.adc_combo.addItem("2nd-order \u03a3\u0394", "sigma_delta2")
+        self.adc_combo.addItem("3rd-order leapfrog", "leapfrog")
+        self.adc_combo.addItem("Leapfrog (control-bounded)", "leapfrog_cb")
         self.adc_combo.currentIndexChanged.connect(self._on_adc_type)
         form.addRow("ADC type", self.adc_combo)
 
@@ -284,7 +291,8 @@ class MainWindow(QWidget):
             self.view.render_once()
 
     def _update_chain(self) -> None:
-        sd_order = {"sigma_delta": 1, "sigma_delta2": 2}.get(self.scene.adc_mode, 0)
+        sd_order = {"sigma_delta": 1, "sigma_delta2": 2, "leapfrog": 3,
+                    "leapfrog_cb": 3}.get(self.scene.adc_mode, 0)
         self.chain.update_state(
             noise_on=self.signal.noise_amp > 0.0,
             filter_on=self.scene.filter_taps > 1,
@@ -333,7 +341,14 @@ class MainWindow(QWidget):
     def _on_adc_type(self, index: int) -> None:
         mode = self.adc_combo.itemData(index)
         self.scene.set_adc_mode(mode)
-        self.dither_check.setEnabled(mode in ("sigma_delta", "sigma_delta2"))
+        self.dither_check.setEnabled(mode in ("sigma_delta", "sigma_delta2", "leapfrog"))
+        # The control-bounded leapfrog only reconstructs at high oversampling, so
+        # drop the signal frequency to put it around OSR ~20 when it is selected.
+        if mode == "leapfrog_cb":
+            target = 0.5 / (20.0 * self.signal.sample_period)   # OSR ~ 20
+            tick = max(self.freq_slider.minimum(),
+                       min(self.freq_slider.maximum(), int(round(target / 0.05))))
+            self.freq_slider.setValue(tick)   # triggers _on_freq -> resets caches
         self._update_chain()
         self._refresh_if_paused()
 

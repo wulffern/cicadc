@@ -29,7 +29,7 @@ from manim import (
 )
 
 from .quantizer import Quantizer
-from .sigma_delta import SigmaDelta1, SigmaDelta2
+from .signal_chain import SignalChain
 from .signal_source import SignalSource
 
 _ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
@@ -60,26 +60,16 @@ class AdcScene:
         filter_taps: int = 1,
         adc_mode: str = "nyquist",
     ) -> None:
-        self.signal = signal or SignalSource()
-        self.quantizer = quantizer or Quantizer()
-        self.filter_taps = filter_taps  # moving-average length on the digital output
+        # The renderer-agnostic DSP core: signal source, quantizer, modulators,
+        # decimation filter, STF/gain/group-delay corrections and the FFT. This
+        # scene is just a *view* over it; other renderers reuse the same chain.
+        self.chain = SignalChain(
+            signal=signal, quantizer=quantizer, filter_taps=filter_taps, adc_mode=adc_mode
+        )
+        self.signal = self.chain.signal          # shared references
+        self.quantizer = self.chain.quantizer
         self.pixel_width = pixel_width
         self.pixel_height = pixel_height
-
-        # ADC behaviour: "nyquist" (memoryless uniform quantizer) or a
-        # sigma-delta modulator ("sigma_delta" = 1st order, "sigma_delta2" = 2nd
-        # order) whose coarse bitstream is decimated by the moving-average filter.
-        self.adc_mode = adc_mode
-        self.sd_dither = 0.0
-        _input_fn = lambda k: self.signal.sample_value(k)  # noqa: E731
-        self._modulators = {
-            "sigma_delta": SigmaDelta1(
-                input_fn=_input_fn, bits=self.quantizer.bits, vref=self.quantizer.vref
-            ),
-            "sigma_delta2": SigmaDelta2(
-                input_fn=_input_fn, bits=self.quantizer.bits, vref=self.quantizer.vref
-            ),
-        }
 
         # Keep ~128 px per frame unit (so 896 px -> 7.0 as before, 1152 -> 9.0):
         # the extra height is reserved for the two analysis strips at the bottom.
@@ -104,12 +94,6 @@ class AdcScene:
         self._fft_mob: VMobject | None = None
         self._fft_key: tuple | None = None
 
-        # Measured modulator signal-transfer (gain/phase), cached per parameter
-        # set (it is time-invariant). Used to undo the modulator's in-band
-        # gain/phase when reconstructing, so the noise readout shows only noise.
-        self._stf: complex | None = None
-        self._stf_key: tuple | None = None
-
         self._text_cache: dict[tuple, Text] = {}
         # Car variants, all keyed to the traces they ride:
         #   "color"  -> blue analog car (the original sprite)
@@ -124,6 +108,40 @@ class AdcScene:
         self._car_arrays["digital_t"] = self._fade_alpha(self._car_arrays["digital"], 0.45)
         self._car_bases: dict[str, object] = {}
         self._layout()
+
+    # --- model state proxied to the signal chain (so the UI and rendering code
+    #     can keep reading/writing scene.<attr> while the DSP lives in the chain) ---
+    @property
+    def filter_taps(self) -> int:
+        return self.chain.filter_taps
+
+    @filter_taps.setter
+    def filter_taps(self, value: int) -> None:
+        self.chain.filter_taps = value
+
+    @property
+    def adc_mode(self) -> str:
+        return self.chain.adc_mode
+
+    @adc_mode.setter
+    def adc_mode(self, value: str) -> None:
+        self.chain.adc_mode = value
+
+    @property
+    def sd_dither(self) -> float:
+        return self.chain.sd_dither
+
+    @sd_dither.setter
+    def sd_dither(self, value: float) -> None:
+        self.chain.sd_dither = value
+
+    @property
+    def fft_size(self) -> int:
+        return self.chain.fft_size
+
+    @fft_size.setter
+    def fft_size(self, value: int) -> None:
+        self.chain.fft_size = value
 
     @staticmethod
     def _tint(gray: np.ndarray | None, rgb: tuple[float, float, float]) -> np.ndarray | None:
@@ -259,122 +277,31 @@ class AdcScene:
         return self.fs_yb + frac * (self.fs_yt - self.fs_yb)
 
     # ------------------------------------------------- digital output helpers
+    # --- DSP delegated to the signal chain (kept as private wrappers so the
+    #     rendering code below can stay unchanged) ---
     def _prepare_sd(self, k_lo: int, k_hi: int) -> None:
-        """Warm up / cache the active sigma-delta modulator over ``[k_lo, k_hi]``."""
-        if self._is_sigma_delta():
-            self._sync_sd()
-            self._modulator().prepare(k_lo, k_hi)
+        self.chain.prepare(k_lo, k_hi)
 
     def _digital_out_sample(self, k: int) -> float:
-        """The digital output level at sample ``k`` (filtered when a decimator
-        is active, otherwise the raw quantizer/modulator level)."""
-        return self._filt_level(k) if int(self.filter_taps) > 1 else self._raw_level(k)
+        return self.chain.digital_out_sample(k)
 
     def _digital_out_at(self, t_rel: float) -> float:
-        """Sample-and-held digital output value at relative time ``t_rel``.
-
-        Mirrors the staircase drawn on the digital panel: a filtered output is
-        delay-compensated so its held value lines up in time with the analog
-        signal it represents.
-        """
-        if int(self.filter_taps) > 1:
-            k = self.signal.sample_index_at(t_rel + self._group_delay())
-            return self._filt_level(k)
-        return self._raw_level(self.signal.sample_index_at(t_rel))
+        return self.chain.digital_out_at(t_rel)
 
     def _filter_order(self) -> int:
-        """Order ``M`` of the sinc^M decimation filter: ``modulator order + 1``.
-
-        Nyquist mode uses a plain moving average (sinc^1); a 1st-order modulator
-        is matched by sinc^2 and a 2nd-order modulator by sinc^3 - the textbook
-        "decimator order = modulator order + 1" rule.
-        """
-        sd = self._modulator()
-        return (sd.order + 1) if sd is not None else 1
+        return self.chain.filter_order()
 
     def _decimation_taps(self) -> np.ndarray:
-        """Composite FIR of the sinc^M decimator (M cascaded K-tap boxcars).
-
-        Cached by ``(K, M)``; ``sum(h) == K**M`` so dividing by it is unity at DC.
-        """
-        K = max(1, int(self.filter_taps))
-        M = self._filter_order()
-        key = (K, M)
-        if getattr(self, "_fir_key", None) != key:
-            h = np.ones(1)
-            box = np.ones(K)
-            for _ in range(M):
-                h = np.convolve(h, box)
-            self._fir = h
-            self._fir_key = key
-        return self._fir
+        return self.chain.decimation_taps()
 
     def _signal_w(self) -> float:
-        """Digital angular frequency (rad/sample) of the input at the sample rate."""
-        return 2.0 * np.pi * self.signal.frequency * self.signal.sample_period
+        return self.chain.signal_w()
 
     def _modulator_stf(self) -> complex:
-        """Measured signal transfer ``STF(e^{jw})`` of the active modulator.
-
-        The decimation filter recovers the modulator output, but a sigma-delta
-        loop does not pass the signal untouched: only its *noise* transfer is
-        shaped, while the *signal* transfer has its own in-band gain/phase. For a
-        1st-order loop this is unity, but the 2nd-order loop's signal gain dips
-        below 1 (and lags) in band; left uncorrected it leaves a residual
-        sinusoid in the reconstruction - a slow waveform that, in LSB units,
-        looks like it grows with bit depth.
-
-        Rather than an analytic model (the linearised 2nd-order loop is actually
-        unstable - it is the quantizer nonlinearity that stabilises it), the
-        transfer is *measured* by a lock-in of the modulator output against the
-        clean input at the signal frequency. It depends only on the modulator
-        parameters and ``f * Ts`` (not on time), so the result is cached.
-        """
-        sd = self._modulator()
-        sig = self.signal
-        w = self._signal_w()
-        if sd is None or abs(w) < 1e-6:
-            return 1.0 + 0.0j
-        key = (
-            self.adc_mode, self.quantizer.bits, self.quantizer.vref, self.sd_dither,
-            round(sig.frequency, 6), round(sig.sample_period, 6), round(sig.amplitude, 6),
-        )
-        if self._stf_key == key and self._stf is not None:
-            return self._stf
-
-        samp_per_cycle = 1.0 / max(sig.frequency * sig.sample_period, 1e-9)
-        n = int(min(max(samp_per_cycle * 24.0, 64.0), 4000.0))
-        k0 = sig.sample_index_now()
-        self._prepare_sd(k0 - n - 2, k0 + 2)
-        ks = np.arange(k0 - n + 1, k0 + 1)
-        t = ks * sig.sample_period
-        y = np.array([self._raw_level(int(k)) for k in ks], dtype=float)
-        ref = sig.amplitude * np.sin(2.0 * np.pi * sig.frequency * t + sig._phase0)
-        win = np.hanning(n)
-        phasor = np.exp(-1j * 2.0 * np.pi * sig.frequency * t)
-        num = np.sum(y * win * phasor)
-        den = np.sum(ref * win * phasor)
-        h = num / den if abs(den) > 1e-12 else (1.0 + 0.0j)
-        self._stf, self._stf_key = h, key
-        return h
+        return self.chain.modulator_stf()
 
     def _group_delay(self) -> float:
-        """Group delay of the reconstruction, in seconds of signal time.
-
-        An ``M``-fold cascade of K-tap boxcars has impulse-response length
-        ``M*(K-1)+1`` and a (linear-phase) group delay of half that. When a
-        decimator is active the modulator's STF phase adds a further (frequency
-        dependent) delay ``-arg(STF)/w`` so the reconstructed output lines up in
-        time with the analog signal it represents.
-        """
-        K = max(1, int(self.filter_taps))
-        M = self._filter_order()
-        delay = M * (K - 1) / 2.0 * self.signal.sample_period
-        if K > 1:
-            w = self._signal_w()
-            if abs(w) > 1e-9:
-                delay += (-np.angle(self._modulator_stf()) / w) * self.signal.sample_period
-        return delay
+        return self.chain.group_delay()
 
     def _digital_car_anchor(self):
         """``(t_rel, sample_index)`` for the delay-compensated digital-output car.
@@ -523,86 +450,37 @@ class AdcScene:
         return items
 
     def _filter_gain(self) -> float:
-        """Magnitude of the full signal path at the input frequency.
-
-        Normalising the reconstructed output by this gain makes the in-band
-        transfer unity, so the recovered amplitude matches the analog signal.
-        This is the sinc^M decimator magnitude (single-stage moving-average
-        magnitude raised to ``M``) times the modulator's signal-transfer
-        magnitude ``|STF|`` - the latter being unity for Nyquist/1st-order but
-        not for the 2nd-order loop, whose in-band gain would otherwise leak into
-        the quantization-noise readout.
-        """
-        K = max(1, int(self.filter_taps))
-        if K == 1:
-            return 1.0
-        M = self._filter_order()
-        w = self._signal_w()
-        s = np.sin(w / 2.0)
-        if abs(s) < 1e-9:
-            return 1.0  # near DC, gain is already 1
-        mag = (abs(np.sin(K * w / 2.0) / s) / K) ** M
-        mag *= abs(self._modulator_stf())
-        return float(max(mag, 0.05))  # clamp to avoid blow-up near a filter null
+        return self.chain.filter_gain()
 
     # ----------------------------------------------------------------- ADC mode
     def _is_sigma_delta(self) -> bool:
-        return self.adc_mode in self._modulators
+        return self.chain.is_sigma_delta()
 
     def _modulator(self):
         """The active sigma-delta modulator, or ``None`` in Nyquist mode."""
-        return self._modulators.get(self.adc_mode)
+        return self.chain.modulator()
 
     def set_adc_mode(self, mode: str) -> None:
-        """Switch between the "nyquist", "sigma_delta" and "sigma_delta2" ADCs."""
-        self.adc_mode = mode
-        self.reset_sd()
+        """Switch between the "nyquist", "sigma_delta", "sigma_delta2" and
+        "leapfrog" ADCs."""
+        self.chain.set_adc_mode(mode)
 
     def set_sd_dither(self, amount: float) -> None:
         """Set the sigma-delta dither amplitude (0 disables it)."""
-        self.sd_dither = amount
-        self.reset_sd()
+        self.chain.set_dither(amount)
 
     def reset_sd(self) -> None:
         """Invalidate every modulator cache (input/quantizer parameters changed)."""
-        for sd in self._modulators.values():
-            sd.reset()
+        self.chain.reset()
 
     def _sync_sd(self) -> None:
-        """Mirror the live quantizer settings into the active modulator, resetting
-        its cache if anything that changes the output sequence has changed."""
-        sd = self._modulator()
-        if sd is None:
-            return
-        if sd.bits != self.quantizer.bits or sd.vref != self.quantizer.vref or sd.dither != self.sd_dither:
-            sd.bits = self.quantizer.bits
-            sd.vref = self.quantizer.vref
-            sd.dither = self.sd_dither
-            sd.reset()
+        self.chain.sync()
 
     def _raw_level(self, k: int) -> float:
-        """Reconstructed (unfiltered) digital level for sample index ``k``.
-
-        For a sigma-delta ADC this is the coarse modulator output; otherwise it
-        is the memoryless uniform quantizer level.
-        """
-        sd = self._modulator()
-        if sd is not None:
-            return sd.output(k)
-        q = self.quantizer
-        return q.level_of(q.code_of(self.signal.sample_value(k)))
+        return self.chain.raw_level(k)
 
     def _filt_level(self, k: int) -> float:
-        """Decimated digital level at sample ``k`` (normalised sinc^M cascade)."""
-        K = max(1, int(self.filter_taps))
-        if K <= 1:
-            return self._raw_level(k)
-        h = self._decimation_taps()
-        gain = self._filter_gain()
-        acc = 0.0
-        for j, hj in enumerate(h):
-            acc += hj * self._raw_level(k - j)
-        return (acc / float(h.sum())) / gain
+        return self.chain.filt_level(k)
 
     def _tangent_angle(self, t_rel: float, aw: float) -> float:
         """Rotation so a car (nose +y) points along the path tangent at ``t_rel``."""
@@ -684,9 +562,26 @@ class AdcScene:
             k_hi = sig.sample_index_at(half + delay) + 2
             self._modulator().prepare(k_lo, k_hi)
 
+        # Control-bounded mode: the converter's actual digital output is the N
+        # local 1-bit control streams. Draw them as thin staircases near the
+        # rails (at the true sample times) so the estimate is visibly *derived*
+        # from them rather than being a mystery staircase.
+        if self.chain.is_control_bounded():
+            for lane_i, (lane, color) in enumerate(
+                zip((0.80, 0.88, 0.96), (QUANT, "#8fd0d8", "#c9a7e8"))
+            ):
+                pts, _ = self._hold_staircase(
+                    lambda k, i=lane_i, a=lane: a * float(self.chain.cb_bits(k)[i]),
+                    self._x_dig, -half, half, delay=0.0,
+                )
+                items.append(self._polyline(pts, color, 1.2))
+
         # Unfiltered (gray) staircase at the true sample times, with sample dots.
         # When the filter is off it is the only output, so draw it more boldly.
-        raw_pts, raw_dots = self._hold_staircase(self._raw_level, self._x_dig, -half, half, delay=0.0)
+        # For the control-bounded mode the "raw" level is already the estimate,
+        # so it carries the estimator's half-control-period delay.
+        raw_delay = delay if self.chain.is_control_bounded() else 0.0
+        raw_pts, raw_dots = self._hold_staircase(self._raw_level, self._x_dig, -half, half, delay=raw_delay)
         if K > 1:
             # With a decimator/filter active, the raw trace is the coarse
             # quantizer/modulator output (pale green) and the filtered trace is
@@ -707,8 +602,9 @@ class AdcScene:
         # Subtitle (changes with bits / averaging / ADC mode).
         sd = self._modulator()
         if sd is not None:
-            ordinal = {1: "1st", 2: "2nd"}.get(sd.order, f"{sd.order}th")
-            sub_text = f"{ordinal}-order \u03a3\u0394  -  {q.bits}-bit"
+            ordinal = {1: "1st", 2: "2nd", 3: "3rd"}.get(sd.order, f"{sd.order}th")
+            label = "leapfrog" if self.adc_mode == "leapfrog" else "\u03a3\u0394"
+            sub_text = f"{ordinal}-order {label}  -  {q.bits}-bit"
         else:
             sub_text = f"{q.bits} bits  -  {q.num_levels} levels"
         if K > 1:
@@ -752,7 +648,7 @@ class AdcScene:
         spans +/- 1 LSB and the noise keeps the same relative height whatever the
         bit depth. The axis is therefore labelled directly in LSBs.
         """
-        return max(self.quantizer.step, 1e-6)
+        return self.chain.noise_full()
 
     def _fft_logfrac(self, norm_freq: float) -> float:
         """Map a normalised frequency ``f / f_s`` to a 0..1 position on the log
@@ -849,7 +745,9 @@ class AdcScene:
         sig = self.signal
         K = max(1, int(self.filter_taps))
         full = self._noise_full()
-        delay = self._group_delay() if K > 1 else 0.0
+        # group_delay() is already 0 without a decimator; for the control-bounded
+        # mode it carries the half-control-period delay of the held 1-bit pulses.
+        delay = self._group_delay()
         hist = self.ns_hist
 
         first_k, last_k = sig.sample_indices_in(-hist + delay, delay)
@@ -901,28 +799,10 @@ class AdcScene:
         if self._fft_key == key and self._fft_mob is not None:
             return self._fft_mob
 
-        # Build the digital-output sequence ending at "now". With a decimator
-        # active, filter the raw levels with one vectorised convolution rather
-        # than re-running the FIR per sample.
-        if K > 1:
-            h = self._decimation_taps()
-            L = len(h)
-            gain = self._filter_gain()
-            k_start = k0 - N + 1 - (L - 1)
-            self._prepare_sd(k_start - 2, k0 + 2)
-            raw = np.array([self._raw_level(k) for k in range(k_start, k0 + 1)], dtype=float)
-            d = np.convolve(raw, h)[L - 1: L - 1 + N] / (h.sum() * gain)
-        else:
-            self._prepare_sd(k0 - N + 1 - 2, k0 + 2)
-            d = np.array([self._raw_level(k) for k in range(k0 - N + 1, k0 + 1)], dtype=float)
+        # FFT (dBFS) of the digital output, computed by the signal chain.
+        db = self.chain.fft_db(k0, N)
 
-        win = np.hanning(N)
-        spec = np.fft.rfft(d * win)
-        coherent_gain = win.sum() / 2.0  # so a full-scale sine peaks at 0 dB
-        mag = np.abs(spec) / max(coherent_gain, 1e-9)
-        db = 20.0 * np.log10(mag + 1e-9)
-
-        n_bins = mag.shape[0]
+        n_bins = db.shape[0]
         base_y = self._fft_y(self.fft_floor_db)
         # Log frequency axis: bin i maps to f/f_s = i/N; skip DC (i == 0).
         pts: List[Tuple[float, float]] = [(self._fft_x(0.0), base_y)]
