@@ -357,10 +357,10 @@ function noiseAt(t) {
   return S.noise * (noiseHash(i0) * (1 - fs) + noiseHash(i0 + 1) * fs);
 }
 function blockerSig(t) {
-  return S.amp2 * Math.sin(2 * Math.PI * S.freq2 * t);
+  return -S.amp2 * Math.sin(2 * Math.PI * S.freq2 * t);
 }
 function blockerSigDeriv(t) {
-  return S.amp2 * 2 * Math.PI * S.freq2 * Math.cos(2 * Math.PI * S.freq2 * t);
+  return -S.amp2 * 2 * Math.PI * S.freq2 * Math.cos(2 * Math.PI * S.freq2 * t);
 }
 function sigAt(t) {
   return cleanSig(t) + (S.blocker ? blockerSig(t) : 0) + noiseAt(t);
