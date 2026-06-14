@@ -1120,12 +1120,55 @@ function drawDigital() {
   panelBg(RP);
   panelLabels(RP, `DIGITAL OUTPUT — ${label}`, '#cdd6e6');
   cx.save(); clip(RP);
+
+  const half = S.win / 2;
+
+  if (S.mode === 'leapfrog_cb') {
+    // Three equal-width sub-panels — one per control bit-stream s1, s2, s3.
+    const w3   = pw(RP) / 3;
+    const cols = ['rgba(182,227,182,0.9)', 'rgba(143,208,216,0.9)', 'rgba(201,167,232,0.9)'];
+    for (let l = 0; l < 3; l++) {
+      const sp = { x0: RP.x0 + l * w3, y0: RP.y0, x1: RP.x0 + (l + 1) * w3, y1: RP.y1 };
+      // Vertical separator between sub-panels
+      if (l > 0) {
+        cx.strokeStyle = '#2b3a63'; cx.lineWidth = 1;
+        cx.beginPath(); cx.moveTo(sp.x0, sp.y0); cx.lineTo(sp.x0, sp.y1); cx.stroke();
+      }
+      // Simplified grid: zero axis, time grid, "now" line
+      cx.strokeStyle = '#3b5090'; cx.lineWidth = Math.max(0.5, pxf);
+      cx.beginPath(); cx.moveTo(vX(sp,0), sp.y0); cx.lineTo(vX(sp,0), sp.y1); cx.stroke();
+      cx.strokeStyle = '#1d2742'; cx.lineWidth = Math.max(0.3, 0.5 * pxf);
+      for (let tt = -Math.ceil(S.win/2); tt <= Math.ceil(S.win/2); tt++) {
+        const y = tY(sp, tt);
+        cx.beginPath(); cx.moveTo(sp.x0, y); cx.lineTo(sp.x1, y); cx.stroke();
+      }
+      cx.strokeStyle = '#ffd400'; cx.lineWidth = Math.max(0.5, pxf); cx.setLineDash([5*pxf, 5*pxf]);
+      cx.beginPath(); cx.moveTo(sp.x0+2, tY(sp,0)); cx.lineTo(sp.x1-2, tY(sp,0)); cx.stroke();
+      cx.setLineDash([]);
+      // Sub-panel label
+      const fSub = Math.max(7, Math.round(10 * pxf));
+      cx.fillStyle = cols[l]; cx.font = `bold ${fSub}px monospace`; cx.textAlign = 'center';
+      cx.fillText('s' + (l + 1), pcx(sp), sp.y0 + Math.round(14 * pxf));
+      // ±1 staircase spanning the full sub-panel width
+      cx.strokeStyle = cols[l]; cx.lineWidth = Math.max(1.3, 2.5 * pxf);
+      holdStaircase(sp, k => cbBits(k)[l], half, 0);
+      // Sample dots
+      const ka2 = Math.floor((S.t - half) / S.Ts), kb2 = Math.ceil((S.t + half) / S.Ts);
+      cx.fillStyle = '#ffd400';
+      for (let k = ka2; k <= kb2; k++) {
+        cx.beginPath();
+        cx.arc(vX(sp, cbBits(k)[l]), tY(sp, k * S.Ts - S.t), Math.max(1, 2.2 * pxf), 0, 2*Math.PI);
+        cx.fill();
+      }
+    }
+    cx.restore();
+    return;
+  }
+
   panelGrid(RP);
 
-  const half  = S.win / 2;
-  // For the control-bounded mode the estimate IS the only output (no separate
-  // coarse trace), so take the single-staircase path regardless of the slider.
-  const K     = S.mode === 'leapfrog_cb' ? 1 : Math.max(1, S.taps);
+  // For all other modes: sinc^M decimation path
+  const K     = Math.max(1, S.taps);
   const delay = groupDelay();
 
   // Reference: src/cicadc/manim_scene.py  _dynamic_right()
@@ -1133,58 +1176,32 @@ function drawDigital() {
     // Coarse modulator/quantizer output (pale green), at the true sample times.
     cx.strokeStyle = 'rgba(182,227,182,0.75)'; cx.lineWidth = Math.max(1, 1.6 * pxf);
     holdStaircase(RP, rawOut, half, 0);
-    // Filtered digital output (white), the sliding sinc^M evaluated at every
-    // sample and delay-compensated so it lines up in time with the analog signal.
+    // Filtered digital output (white), delay-compensated.
     cx.strokeStyle = '#cdd6e6'; cx.lineWidth = Math.max(1.3, 2.6 * pxf);
     holdStaircase(RP, filtOut, half, delay);
   } else {
-    if (S.mode === 'leapfrog_cb') {
-      // The converter's actual digital output: three local 1-bit control
-      // streams, drawn as thin staircases near the rails (true sample times).
-      const lanes = [0.80, 0.88, 0.96];
-      const cols  = ['rgba(182,227,182,0.8)', 'rgba(143,208,216,0.8)', 'rgba(201,167,232,0.8)'];
-      for (let l = 0; l < 3; l++) {
-        cx.strokeStyle = cols[l]; cx.lineWidth = Math.max(0.8, 1.2 * pxf);
-        holdStaircase(RP, k => cbBits(k)[l] * lanes[l], half, 0);
-      }
-      // lane labels at the top rails
-      cx.font = `${Math.max(6, Math.round(9 * pxf))}px monospace`; cx.textAlign = 'center';
-      for (let l = 0; l < 3; l++) {
-        cx.fillStyle = cols[l];
-        cx.fillText('s' + (l + 1), vX(RP, lanes[l]), RP.y0 + Math.round(12 * pxf));
-      }
-    }
-    // No filter: the quantizer/modulator output IS the digital output. In CB
-    // mode the "raw" level is the estimate, which carries the half-control-
-    // period delay of the held 1-bit pulses — shift it so it lines up in time.
     cx.strokeStyle = '#cdd6e6'; cx.lineWidth = Math.max(1.3, 2.6 * pxf);
-    holdStaircase(RP, rawOut, half, delay);
+    holdStaircase(RP, rawOut, half, 0);
   }
 
-  // Sample dots on the raw (coarse) staircase
-  const rawDelay = K > 1 ? 0 : delay;   // CB: dots ride the shifted estimate
-  const ka = Math.floor((S.t - half + rawDelay) / S.Ts), kb = Math.ceil((S.t + half + rawDelay) / S.Ts);
+  // Sample dots on the raw staircase
+  const ka = Math.floor((S.t - half) / S.Ts), kb = Math.ceil((S.t + half) / S.Ts);
   cx.fillStyle = '#ffd400';
   for (let k = ka; k <= kb; k++) {
     cx.beginPath();
-    cx.arc(vX(RP, rawOut(k)), tY(RP, k*S.Ts - S.t - rawDelay), Math.max(1, 2.2*pxf), 0, 2*Math.PI);
+    cx.arc(vX(RP, rawOut(k)), tY(RP, k*S.Ts - S.t), Math.max(1, 2.2*pxf), 0, 2*Math.PI);
     cx.fill();
   }
 
   // Cars
   const kNow = Math.floor(S.t / S.Ts);
   if (K > 1) {
-    // Coarse-output ghost car at "now"
     drawCar(vX(RP, rawOut(kNow)), tY(RP, 0), 0, 'green', 0.60);
-    // Filtered digital car, delay-compensated into the past (same anchor as LP)
     const dVis = Math.min(delay, 0.82 * half);
     const kVis = Math.floor((S.t + delay - dVis) / S.Ts);
     drawCar(vX(RP, filtOut(kVis)), tY(RP, -dVis), 0, 'gray', 1.0);
   } else {
-    // No filter: a single digital car at "now" (delay-compensated in CB mode)
-    const dVis = Math.min(delay, 0.82 * half);
-    const kVis = Math.floor((S.t + delay - dVis) / S.Ts);
-    drawCar(vX(RP, rawOut(kVis)), tY(RP, -dVis), 0, 'gray', 1.0);
+    drawCar(vX(RP, rawOut(kNow)), tY(RP, 0), 0, 'gray', 1.0);
   }
 
   cx.restore();
